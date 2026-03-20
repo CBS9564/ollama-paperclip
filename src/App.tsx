@@ -523,7 +523,7 @@ export default function App() {
     const modelNames = availableModels.map(m => m.name).join(', ');
     return `CORE PRINCIPLES:
 1. REFLECTION: Before creating agents or tasks, think deeply about the user's intent, the domains involved, and the most efficient way to achieve the goal. Describe your reasoning in the CLASSIFY section.
-2. SPECIALIZATION: Create agents with very specific, detailed roles. Don't use generic titles.
+2. AGENT EXPERTISE: In PROVISION, you MUST provide an extremely detailed, technical, and precise system prompt for each agent. Define their specific expertise, analytical frameworks, and operational constraints. Avoid generic descriptions; act as a senior technical lead designing a specialized workforce.
 3. IMAGE GENERATION: We have a HIGH-PERFORMANCE NVIDIA T1000 GPU dedicated to image generation. If the project requires visuals, ALWAYS create an agent named 'Illustrateur' (or 'Illustrator'). IMPORTANT: Place image tasks AFTER the analysis tasks they depend on. The task title should explicitly mention dependencies (e.g., "Generate image BASED ON Stylist's color palette"). The system uses a specialized REST API that automatically enriches your prompt for the best results.
 4. CHRONOLOGY: Ensure the [PLAN] is strictly sequential. Tasks that require information from earlier agents must follow them in the list.
 5. MODEL INTELLIGENCE: Assign each agent the most suitable model from the available list below. Use larger models for complex reasoning/creative writing and smaller/faster models for specialized data extraction or formatting.
@@ -538,8 +538,8 @@ You MUST use these tags exactly for the system to parse your plan:
 
 1. CLASSIFY: [Your reasoning, domain analysis, and task dependency logic]
 2. PROVISION: 
-   [AGENT: Name | Detailed System Prompt | ModelName]
-   (Repeat for each agent).
+   [AGENT: Name | HIGHLY DETAILED TECHNICAL SYSTEM PROMPT | ModelName]
+   (Repeat for each agent. The system prompt MUST be a long, descriptive paragraph of at least 150-300 characters).
 
 3. PLAN:
    [TASK: Clear Title | Agent Name]
@@ -548,11 +548,11 @@ You MUST use these tags exactly for the system to parse your plan:
 Example (French):
 CLASSIFY: Étude de marché et stratégie de prix.
 PROVISION: 
-[AGENT: Analyste | Vous êtes un expert en économie de marché... | llama3:latest]
-[AGENT: Strategiste | Vous êtes un consultant en marketing... | mistral:latest]
+[AGENT: Analyste Technique | Vous êtes un expert en économie de marché spécialisé dans les structures de coûts des semi-conducteurs. Votre rôle est d'analyser les rapports trimestriels pour extraire les marges brutes... | llama3:latest]
+[AGENT: Strategiste | Vous êtes un consultant en stratégie de pénétration pour le secteur High-Tech... | mistral:latest]
 PLAN:
-[TASK: Analyser les prix des concurrents | Analyste]
-[TASK: Proposer une stratégie de pénétration basée sur l'analyse | Strategiste]`;
+[TASK: Analyser les structures de coûts | Analyste Technique]
+[TASK: Proposer une stratégie de prix basée sur l'analyse technique | Strategiste]`;
   };
 
   const createNewSession = () => {
@@ -726,20 +726,8 @@ PLAN:
                 color: colors[updatedAgents.length % colors.length],
                 temperature: suggested.temperature ?? 0.7,
                 num_ctx: suggested.num_ctx ?? 4096,
-                isPending: true // New agents start as pending
+                isPending: false // Agents are now automated by default
               });
-
-              // Add agent creation task assigned to orchestrator
-              const agentCreationTaskTitle = `(Setup) Initialize Agent: ${agentName}`;
-              if (!updatedTasks.find(t => t.title === agentCreationTaskTitle)) {
-                updatedTasks.push({
-                  id: crypto.randomUUID(),
-                  title: agentCreationTaskTitle,
-                  status: 'todo' as TaskStatus,
-                  createdAt: Date.now(),
-                  agentId: 'orchestrator'
-                });
-              }
             }
           });
 
