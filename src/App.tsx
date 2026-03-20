@@ -8,6 +8,7 @@ import {
   Cpu, 
   ChevronLeft, 
   ChevronRight,
+  ChevronDown,
   Monitor,
   RefreshCw,
   CheckCircle2,
@@ -23,7 +24,9 @@ import {
   Users,
   Play,
   AlertCircle,
-  Square
+  Square,
+  Download,
+  HardDrive
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
@@ -32,6 +35,284 @@ import { cn } from './lib/utils';
 import { Message, ChatSession, OllamaModel, OllamaSettings, Task, TaskStatus, Agent } from './types';
 import { OllamaService } from './services/ollama';
 
+/**
+ * Extracts agent definitions from raw text using [AGENT: Name | Prompt] format.
+ * Resilient to multi-line content and missing separators.
+ */
+const parseAgentsFromContent = (content: string): { name: string, prompt: string, model?: string }[] => {
+  // Support [AGENT: Name | Prompt | Model] or [AGENT: Name | Prompt]
+  const agentRegex = /\[AGENT\s*:\s*([\s\S]*?)(?:\s*\|\s*([\s\S]*?))?(?:\s*\|\s*([\s\S]*?))?\]/gi;
+  const matches = [...content.matchAll(agentRegex)];
+  return matches.map(m => ({ 
+    name: m[1].trim(), 
+    prompt: m[2]?.trim() || 'You are a helpful AI assistant.',
+    model: m[3]?.trim()
+  }));
+};
+
+/**
+ * Extracts task definitions from raw text using [TASK: Title | Agent] format.
+ * Supports optional agent assignment and case-insensitive tags.
+ */
+const parseTasksFromContent = (content: string): { title: string, agentName: string }[] => {
+  const taskRegex = /\[TASK\s*:\s*([\s\S]*?)(?:\s*\|\s*([\s\S]*?))?\]/gi;
+  const matches = [...content.matchAll(taskRegex)];
+  return matches.map(m => ({ title: m[1].trim(), agentName: m[2]?.trim() || '' }));
+};
+
+/**
+ * Reusable status icon component for tasks.
+ */
+const StatusIcon = ({ status, size = 16 }: { status: TaskStatus; size?: number }) => {
+  switch (status) {
+    case 'done':
+      return <CheckCircle size={size} className="text-emerald-500" />;
+    case 'in-progress':
+      return <PlayCircle size={size} className="text-blue-500 animate-pulse" />;
+    case 'failed':
+      return <AlertCircle size={size} className="text-red-500" />;
+    default:
+      return <Circle size={size} className="text-black/10" />;
+  }
+};
+
+/**
+ * Specialized component to render chat message content with visual task/agent cards.
+ * Defined outside App to prevent remount flickering during streaming.
+ */
+const MessageContent = React.memo(({ 
+  content, 
+  agents, 
+  tasks, 
+  models, 
+  onApproveAgent,
+  onExecuteTask 
+}: { 
+  content: string, 
+  agents: Agent[], 
+  tasks: Task[], 
+  models: OllamaModel[],
+  onApproveAgent: (agentId: string, updates: Partial<Agent>) => void,
+  onExecuteTask: (task: Task) => void
+}) => {
+  // Regex for both tags
+  const combinedRegex = /(\[(?:TASK|AGENT)\s*:\s*[\s\S]*?\])/gi;
+  const parts = content.split(combinedRegex);
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+
+  // Form state for agent approval
+  const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
+  const [editPrompt, setEditPrompt] = useState('');
+  const [editModel, setEditModel] = useState('');
+
+  return (
+    <div className="space-y-4">
+      {parts.map((part, index) => {
+        if (part.match(/\[AGENT\s*:\s*/i)) {
+          const agentDef = parseAgentsFromContent(part)[0];
+          if (!agentDef) return <span key={index}>{part}</span>;
+          
+          // Find actual agent in state
+          const liveAgent = agents.find(a => a.name.toLowerCase() === agentDef.name.toLowerCase());
+          if (!liveAgent) return <span key={index}>{part}</span>;
+
+          if (liveAgent.isPending) {
+            const isEditing = editingAgentId === liveAgent.id;
+            
+            return (
+              <motion.div 
+                key={`pending-agent-${liveAgent.id}`}
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="my-4 p-4 rounded-xl bg-amber-50/50 border border-amber-500/10 shadow-sm"
+              >
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-10 h-10 rounded-full bg-amber-500/10 flex items-center justify-center">
+                    <UserPlus size={18} className="text-amber-600" />
+                  </div>
+                  <div className="flex-1">
+                    <div className="text-[10px] font-bold uppercase tracking-tight text-amber-600/60">Approval Required</div>
+                    <div className="text-sm font-semibold text-amber-900">{liveAgent.name}</div>
+                  </div>
+                  {!isEditing && (
+                    <button 
+                      onClick={() => {
+                        setEditingAgentId(liveAgent.id);
+                        setEditPrompt(liveAgent.systemPrompt);
+                        setEditModel(liveAgent.model);
+                      }}
+                      className="p-2 hover:bg-amber-500/10 rounded-lg text-amber-600 transition-colors"
+                    >
+                      <Settings size={16} />
+                    </button>
+                  )}
+                </div>
+
+                {isEditing ? (
+                  <div className="space-y-4">
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold uppercase text-black/40">Model</label>
+                      <select 
+                        value={editModel}
+                        onChange={(e) => setEditModel(e.target.value)}
+                        className="w-full p-2 rounded-lg bg-white border border-black/5 text-xs outline-none focus:ring-2 focus:ring-amber-500/20"
+                      >
+                        {models.map(m => <option key={m.name} value={m.name}>{m.name}</option>)}
+                      </select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold uppercase text-black/40">System Prompt</label>
+                      <textarea 
+                        value={editPrompt}
+                        onChange={(e) => setEditPrompt(e.target.value)}
+                        rows={4}
+                        className="w-full p-2 rounded-lg bg-white border border-black/5 text-xs outline-none focus:ring-2 focus:ring-amber-500/20 resize-none"
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => {
+                          onApproveAgent(liveAgent.id, { systemPrompt: editPrompt, model: editModel });
+                          setEditingAgentId(null);
+                        }}
+                        className="flex-1 py-2 rounded-lg bg-amber-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-amber-600 transition-colors"
+                      >
+                        Validate & Provision
+                      </button>
+                      <button 
+                        onClick={() => setEditingAgentId(null)}
+                        className="px-4 py-2 rounded-lg bg-black/5 text-black/40 text-xs font-bold uppercase tracking-wider hover:bg-black/10 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="p-3 rounded-lg bg-white/50 border border-amber-500/5 text-xs text-amber-900/80 line-clamp-2 italic">
+                      "{liveAgent.systemPrompt}"
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="px-2 py-1 rounded-lg bg-amber-500/10 text-[10px] font-bold text-amber-600 uppercase">
+                        {liveAgent.model}
+                      </div>
+                      <button 
+                        onClick={() => onApproveAgent(liveAgent.id, {})}
+                        className="flex-1 py-2 rounded-lg bg-amber-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-amber-600 transition-colors shadow-sm"
+                      >
+                        Quick Approve
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            );
+          }
+
+          return (
+            <motion.div 
+              key={`active-agent-${liveAgent.id}`}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="my-2 p-3 rounded-xl bg-black/[0.02] border border-black/5 flex items-center gap-3 group"
+            >
+              <div className="w-10 h-10 rounded-full bg-emerald-500/10 flex items-center justify-center">
+                <UserPlus size={18} className="text-emerald-600" />
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-bold uppercase tracking-tight text-black/40">Agent Activated</span>
+                </div>
+                <div className="text-sm font-semibold">{liveAgent.name}</div>
+              </div>
+            </motion.div>
+          );
+        }
+
+        if (part.match(/\[TASK\s*:\s*/i)) {
+          const taskDef = parseTasksFromContent(part)[0];
+          if (!taskDef) return <span key={index}>{part}</span>;
+
+          const liveTask = tasks.find(t => t.title.trim().toLowerCase() === taskDef.title.trim().toLowerCase());
+          const assignedAgent = agents.find(a => a.name.toLowerCase() === taskDef.agentName.toLowerCase());
+          const isExpanded = expandedTaskId === liveTask?.id;
+
+          return (
+            <motion.div 
+              key={`task-${liveTask?.id || index}`}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="my-2 p-4 rounded-xl bg-black/[0.02] border border-black/5 hover:border-black/20 transition-all"
+            >
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-full bg-emerald-500/5">
+                    <StatusIcon status={liveTask?.status || 'todo'} size={18} />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[9px] font-black uppercase text-black/20 tracking-[0.1em]">Assigned to {taskDef.agentName}</span>
+                      {liveTask?.status && (
+                        <span className={cn(
+                          "px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-tighter",
+                          liveTask.status === 'done' ? "bg-emerald-500/10 text-emerald-600" :
+                          liveTask.status === 'in-progress' ? "bg-blue-500/10 text-blue-600" :
+                          "bg-black/5 text-black/40"
+                        )}>
+                          {liveTask.status}
+                        </span>
+                      )}
+                    </div>
+                    <div className={cn(
+                      "text-sm font-semibold tracking-tight",
+                      liveTask?.status === 'done' && "text-black/30 line-through decoration-emerald-500/20"
+                    )}>{taskDef.title}</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {assignedAgent && (
+                    <div className="px-2 py-1 rounded-lg bg-white border border-black/[0.03] flex items-center gap-1.5 shadow-sm">
+                      <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: assignedAgent.color }} />
+                      <span className="text-[10px] font-bold text-black/60 uppercase tracking-tight">{assignedAgent.name}</span>
+                    </div>
+                  )}
+                  {liveTask?.result && (
+                    <button 
+                      onClick={() => setExpandedTaskId(isExpanded ? null : liveTask.id)}
+                      className="p-2 rounded-lg hover:bg-black/5 text-black/20 transition-colors"
+                    >
+                      <ChevronDown size={14} className={cn("transition-transform", isExpanded && "rotate-180")} />
+                    </button>
+                  )}
+                  {liveTask && liveTask.status === 'todo' && (
+                    <button 
+                      onClick={() => onExecuteTask(liveTask)}
+                      className="p-2 rounded-lg bg-black/5 hover:bg-black text-black/40 hover:text-white transition-all shadow-sm"
+                    >
+                      <Play size={12} />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {isExpanded && liveTask?.result && (
+                <motion.div 
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  className="mt-2 p-3 rounded-lg bg-white border border-black/5 text-xs text-black/70 leading-relaxed overflow-hidden"
+                >
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{liveTask.result}</ReactMarkdown>
+                </motion.div>
+              )}
+            </motion.div>
+          );
+        }
+
+        return <span key={index} className="whitespace-pre-wrap">{part}</span>;
+      })}
+    </div>
+  );
+});
 export default function App() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -48,10 +329,71 @@ export default function App() {
   });
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
 
+  // Model Manager State
+  const [pullInput, setPullInput] = useState('');
+  const [isPulling, setIsPulling] = useState(false);
+  const [pullProgress, setPullProgress] = useState<import('./types').PullProgress | null>(null);
+  const [pullError, setPullError] = useState<string | null>(null);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const isExecutingTaskRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const ollama = new OllamaService(settings.baseUrl);
+
+  const handlePullModel = async () => {
+    if (!pullInput.trim() || isPulling) return;
+    setIsPulling(true);
+    setPullError(null);
+    setPullProgress(null);
+    
+    try {
+      await ollama.pullModel(pullInput.trim(), (progress) => {
+        setPullProgress(progress);
+      });
+      setPullInput('');
+      
+      // Refresh models
+      const connected = await ollama.checkConnection();
+      setIsConnected(connected);
+      if (connected) {
+        const modelList = await ollama.listModels();
+        setModels(modelList);
+      }
+      setPullProgress(null);
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        setPullError(err.message || 'Failed to pull model. Check the tag name and connection.');
+      }
+    } finally {
+      setIsPulling(false);
+    }
+  };
+
+  const handleAbortPull = () => {
+    ollama.abortPull();
+    setIsPulling(false);
+    setPullProgress(null);
+  };
+
+  const handleDeleteModel = async (modelName: string) => {
+    if (!window.confirm(`Are you sure you want to permanently delete the model "${modelName}" from your server?`)) return;
+    try {
+      await ollama.deleteModel(modelName);
+      
+      // Refresh models
+      const connected = await ollama.checkConnection();
+      setIsConnected(connected);
+      if (connected) {
+        const modelList = await ollama.listModels();
+        setModels(modelList);
+        if (settings.selectedModel === modelName) {
+          setSettings(prev => ({ ...prev, selectedModel: modelList.length > 0 ? modelList[0].name : '' }));
+        }
+      }
+    } catch (err: any) {
+      alert(`Failed to delete model: ${err.message}`);
+    }
+  };
 
   // Load data
   useEffect(() => {
@@ -114,6 +456,40 @@ export default function App() {
 
   const currentSession = sessions.find(s => s.id === currentSessionId);
 
+  const getOrchestratorPrompt = (availableModels: OllamaModel[]) => {
+    const modelNames = availableModels.map(m => m.name).join(', ');
+    return `CORE PRINCIPLES:
+1. REFLECTION: Before creating agents or tasks, think deeply about the user's intent, the domains involved, and the most efficient way to achieve the goal. Describe your reasoning in the CLASSIFY section.
+2. SPECIALIZATION: Create agents with very specific, detailed roles. Don't use generic titles. Define their expertise, tone, and constraints in their system prompt.
+3. MODEL INTELLIGENCE: Assign each agent the most suitable model from the available list below. Use larger models for complex reasoning/creative writing and smaller/faster models for specialized data extraction or formatting.
+4. COLLABORATION: Instruct agents that they can suggest task re-attribution or request clarifications in their results if they hit a blocker.
+5. LANGUAGE CONSISTENCY: ALWAYS respond and define agent prompts in the SAME LANGUAGE as the user input (e.g., if the user asks in French, everything must be in French).
+
+AVAILABLE MODELS ON THIS SERVER:
+${modelNames || 'Standard models detected.'}
+
+REQUIRED STRUCTURED FORMAT:
+You MUST use these tags exactly for the system to parse your plan:
+
+1. CLASSIFY: [Your reasoning and domain analysis]
+2. PROVISION: 
+   [AGENT: Name | Detailed System Prompt | ModelName]
+   (Repeat for each agent. ModelName is optional but preferred).
+
+3. PLAN:
+   [TASK: Clear Title | Agent Name]
+   (Ensure tasks are sequential and cover the entire goal).
+
+Example (French):
+CLASSIFY: Étude de marché et stratégie de prix.
+PROVISION: 
+[AGENT: Analyste | Vous êtes un expert en économie de marché... | llama3:latest]
+[AGENT: Strategiste | Vous êtes un consultant en marketing... | mistral:latest]
+PLAN:
+[TASK: Analyser les prix des concurrents | Analyste]
+[TASK: Proposer une stratégie de pénétration | Strategiste]`;
+  };
+
   const createNewSession = () => {
     const newSession: ChatSession = {
       id: crypto.randomUUID(),
@@ -125,16 +501,7 @@ export default function App() {
           id: 'orchestrator',
           name: 'Orchestrator',
           model: settings.selectedModel,
-          systemPrompt: 'You are a Multi-Agent Orchestrator (inspired by erukude/multiagent-orchestrator). Your goal is to manage a team of specialized agents to solve complex user requests.\n\n' +
-            'STRUCTURED OUTPUT RULES:\n' +
-            '1. CLASSIFY: Identify the domains involved.\n' +
-            '2. PROVISION: Define needed specialized agents using: [AGENT: Name | System Prompt]\n' +
-            '3. PLAN: Break down the request into sequential tasks using: [TASK: Title | Agent Name]\n\n' +
-            'Example:\n' +
-            '[AGENT: DataAnalyst | You are a data scientist...]\n' +
-            '[AGENT: Reporter | You are a technical writer...]\n' +
-            '[TASK: Extract statistics from CSV | DataAnalyst]\n' +
-            '[TASK: Generate executive summary | Reporter]',
+          systemPrompt: getOrchestratorPrompt(models),
           color: '#10b981'
         }
       ],
@@ -142,7 +509,7 @@ export default function App() {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    setSessions([newSession, ...sessions]);
+    setSessions(prev => [newSession, ...prev]);
     setCurrentSessionId(newSession.id);
     setShowSettings(false);
     setView('chat');
@@ -156,26 +523,6 @@ export default function App() {
     if (currentSessionId === id) {
       setCurrentSessionId(newSessions.length > 0 ? newSessions[0].id : null);
     }
-  };
-
-  /**
-   * Extracts agent definitions from raw text using [AGENT: Name | Prompt] format.
-   * Resilient to multi-line content and missing separators.
-   */
-  const parseAgentsFromContent = (content: string): { name: string, prompt: string }[] => {
-    const agentRegex = /\[AGENT:\s*([\s\S]*?)(?:\s*\|\s*([\s\S]*?))?\]/gi;
-    const matches = [...content.matchAll(agentRegex)];
-    return matches.map(m => ({ name: m[1].trim(), prompt: m[2]?.trim() || 'You are a helpful AI assistant.' }));
-  };
-
-  /**
-   * Extracts task definitions from raw text using [TASK: Title | Agent] format.
-   * Supports optional agent assignment and case-insensitive tags.
-   */
-  const parseTasksFromContent = (content: string): { title: string, agentName: string }[] => {
-    const taskRegex = /\[TASK:\s*([\s\S]*?)(?:\s*\|\s*([\s\S]*?))?\]/gi;
-    const matches = [...content.matchAll(taskRegex)];
-    return matches.map(m => ({ title: m[1].trim(), agentName: m[2]?.trim() || '' }));
   };
 
   /**
@@ -204,17 +551,19 @@ export default function App() {
     setIsLoading(true);
     abortControllerRef.current = new AbortController();
 
+    const isAgentModeAtStart = settings.isAgentMode;
     let targetSessionId = currentSessionId;
-    let targetSession = sessions.find(s => s.id === targetSessionId);
-    
-    // If no session found, or no session selected, create a new one as part of the initial state update
-    const isNewSession = !targetSessionId || !targetSession;
+    let activeSession = currentSession;
     let tempNewSession: ChatSession | null = null;
-    if (isNewSession) {
+
+    if (!targetSessionId || !activeSession) {
       tempNewSession = createNewSession();
       targetSessionId = tempNewSession.id;
-      targetSession = tempNewSession;
+      activeSession = tempNewSession;
     }
+
+    const orchestrator = activeSession.agents.find(a => a.id === 'orchestrator');
+    const systemPrompt = isAgentModeAtStart ? getOrchestratorPrompt(models) : undefined;
 
     const userMessage: Message = {
       id: crypto.randomUUID(),
@@ -231,9 +580,7 @@ export default function App() {
     };
 
     setSessions(prev => {
-      // Find session in the latest state
       const target = prev.find(s => s.id === targetSessionId);
-      
       if (target) {
         return prev.map(s => s.id === targetSessionId ? {
           ...s,
@@ -242,11 +589,10 @@ export default function App() {
           title: s.messages.length === 0 ? input.slice(0, 30) : s.title
         } : s);
       } else if (tempNewSession) {
-        // Just in case it wasn't in prev yet (though createNewSession already added it to sessions state, 
-        // but that update might not have landed yet).
         return [{
           ...tempNewSession,
           messages: [userMessage, assistantMessage],
+          updatedAt: Date.now(),
           title: input.slice(0, 30)
         }, ...prev];
       }
@@ -255,30 +601,26 @@ export default function App() {
 
     setInput('');
 
-    const orchestrator = targetSession?.agents.find(a => a.id === 'orchestrator');
-    const systemPrompt = settings.isAgentMode ? orchestrator?.systemPrompt : undefined;
-    
     let lastUpdateTime = Date.now();
     let accumulatedContent = '';
 
     try {
-      await ollama.chat(settings.selectedModel, [...(targetSession?.messages || []), userMessage], (chunk) => {
+      await ollama.chat(settings.selectedModel, [...(activeSession?.messages || []), userMessage], (chunk) => {
         accumulatedContent += chunk;
         
         const now = Date.now();
-        if (now - lastUpdateTime > 100) { // Throttle updates to 10fps
+        if (now - lastUpdateTime > 100) {
           lastUpdateTime = now;
-          updateAssistantMessage(targetSessionId!, accumulatedContent);
+          updateAssistantMessage(targetSessionId!, accumulatedContent, isAgentModeAtStart);
         }
       }, systemPrompt, abortControllerRef.current.signal);
       
-      // Final update to ensure everything is captured
-      updateAssistantMessage(targetSessionId!, accumulatedContent);
+      updateAssistantMessage(targetSessionId!, accumulatedContent, isAgentModeAtStart);
     } catch (error: any) {
       if (error.name === 'AbortError') {
-        console.log('Generation aborted by user');
+        console.log('Generation aborted');
       } else {
-        console.error(error);
+        console.error('Chat error:', error);
       }
     } finally {
       setIsLoading(false);
@@ -286,7 +628,7 @@ export default function App() {
     }
   };
 
-  const updateAssistantMessage = (sessionId: string, fullContent: string) => {
+  const updateAssistantMessage = (sessionId: string, fullContent: string, isAgentMode: boolean) => {
     setSessions(prev => prev.map(s => {
       if (s.id === sessionId) {
         const messages = [...s.messages];
@@ -295,9 +637,12 @@ export default function App() {
           messages[messages.length - 1] = { ...lastMsg, content: fullContent };
         }
 
-        if (settings.isAgentMode) {
+        if (isAgentMode) {
           const suggestedAgents = parseAgentsFromContent(fullContent);
           const suggestedTasks = parseTasksFromContent(fullContent);
+          
+          if (suggestedAgents.length > 0) console.log('Parsed Agents:', suggestedAgents);
+          if (suggestedTasks.length > 0) console.log('Parsed Tasks:', suggestedTasks);
           
           let updatedAgents = [...s.agents];
           let updatedTasks = [...s.tasks];
@@ -309,9 +654,10 @@ export default function App() {
               updatedAgents.push({
                 id: crypto.randomUUID(),
                 name: agentName,
-                model: settings.selectedModel,
+                model: suggested.model || settings.selectedModel,
                 systemPrompt: suggested.prompt,
-                color: colors[updatedAgents.length % colors.length]
+                color: colors[updatedAgents.length % colors.length],
+                isPending: true // New agents start as pending
               });
 
               // Add agent creation task assigned to orchestrator
@@ -363,7 +709,11 @@ export default function App() {
     if (settings.isAgentMode && !isLoading && currentSessionId) {
       const pendingTask = currentSession?.tasks.find(t => t.status === 'todo');
       if (pendingTask) {
-        executeTask(pendingTask);
+        const agent = currentSession?.agents.find(a => a.id === pendingTask.agentId);
+        // Only run if agent is NOT pending (orchestrator is never pending)
+        if (!agent || !agent.isPending || pendingTask.agentId === 'orchestrator') {
+          executeTask(pendingTask);
+        }
       } else if (currentSession?.tasks.length > 0 && currentSession.tasks.every(t => t.status === 'done' || t.status === 'failed')) {
         // All tasks done, maybe orchestrator should summarize?
         // For now, just stop.
@@ -418,6 +768,18 @@ export default function App() {
     }));
   };
 
+  const approveAgent = (agentId: string, updates: Partial<Agent>) => {
+    setSessions(prev => prev.map(s => {
+      if (s.id === currentSessionId) {
+        return {
+          ...s,
+          agents: s.agents.map(a => a.id === agentId ? { ...a, ...updates, isPending: false } : a)
+        };
+      }
+      return s;
+    }));
+  };
+
   const updateAgent = (agentId: string, updates: Partial<Agent>) => {
     setSessions(prev => prev.map(s => {
       if (s.id === currentSessionId) {
@@ -428,6 +790,45 @@ export default function App() {
       }
       return s;
     }));
+  };
+
+  /**
+   * Generates a final summary once all tasks in a session are completed.
+   */
+  const generateFinalSummary = async (sessionId: string) => {
+    const session = sessions.find(s => s.id === sessionId);
+    if (!session) return;
+
+    const orchestrator = session.agents.find(a => a.id === 'orchestrator');
+    const resultsContext = session.tasks
+      .map(t => `Task: ${t.title}\nAgent: ${session.agents.find(a => a.id === t.agentId)?.name || 'Orchestrator'}\nResult: ${t.result}`)
+      .join('\n\n---\n\n');
+
+    const prompt = `ALL ORCHESTRATED TASKS ARE NOW COMPLETE. 🎯\n\nHere are the results for each phase:\n\n${resultsContext}\n\nBased on these outcomes, please provide a comprehensive final summary for the user. Synthesize the findings, highlight key accomplishments, and offer any final recommendations or next steps. Be encouraging and clear.✨`;
+
+    const summaryId = crypto.randomUUID();
+    const summaryMsg: Message = {
+      id: summaryId,
+      role: 'assistant',
+      content: 'All tasks are complete! Synthesizing the final results...',
+      timestamp: Date.now(),
+      isSummary: true
+    };
+
+    setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, messages: [...s.messages, summaryMsg] } : s));
+    setIsLoading(true);
+
+    let accumulated = '';
+    try {
+      await ollama.chat(orchestrator?.model || settings.selectedModel, [...session.messages, { id: 'summary-user', role: 'user', content: prompt, timestamp: Date.now() }], (chunk) => {
+        accumulated += chunk;
+        updateAssistantMessage(sessionId, accumulated, false);
+      }, orchestrator?.systemPrompt);
+    } catch (err) {
+      console.error('Final summary generation failed:', err);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const deleteAgent = (agentId: string) => {
@@ -531,15 +932,28 @@ export default function App() {
       }));
 
       // Mark as done
-      setSessions(prev => prev.map(s => {
-        if (s.id === currentSessionId) {
-          return {
-            ...s,
-            tasks: s.tasks.map(t => t.id === task.id ? { ...t, status: 'done', completedAt: Date.now() } : t)
-          };
+      setSessions(prev => {
+        const nextSessions = prev.map(s => {
+          if (s.id === currentSessionId) {
+            return {
+              ...s,
+              tasks: s.tasks.map(t => t.id === task.id ? { ...t, status: 'done' as TaskStatus, completedAt: Date.now() } : t)
+            };
+          }
+          return s;
+        });
+
+        // Trigger final summary if all tasks are complete
+        const targetSession = nextSessions.find(s => s.id === currentSessionId);
+        if (targetSession && targetSession.tasks.length > 0 && targetSession.tasks.every(t => t.status === 'done')) {
+          const hasSummary = targetSession.messages.some(m => m.isSummary);
+          if (!hasSummary) {
+             setTimeout(() => generateFinalSummary(currentSessionId!), 1000);
+          }
         }
-        return s;
-      }));
+
+        return nextSessions;
+      });
     } catch (error: any) {
       if (error.name === 'AbortError') {
         setSessions(prev => prev.map(s => {
@@ -718,49 +1132,178 @@ export default function App() {
         {/* Content Area */}
         <div className="flex-1 overflow-hidden flex flex-col">
           {showSettings ? (
-            <div className="flex-1 p-8 max-w-2xl mx-auto w-full">
-              <h2 className="text-xl font-semibold mb-8">Settings</h2>
-              <div className="space-y-6">
-                <div className="space-y-2">
-                  <label className="text-xs font-medium text-black/60 uppercase tracking-wider">Ollama Server URL</label>
-                  <div className="flex gap-2">
-                    <input 
-                      type="text" 
-                      value={settings.baseUrl}
-                      onChange={(e) => setSettings(prev => ({ ...prev, baseUrl: e.target.value }))}
-                      className="flex-1 p-2 rounded-lg border border-black/10 bg-white text-sm focus:outline-none"
-                      placeholder="http://localhost:11434"
-                    />
-                    <button 
-                      onClick={checkConnection}
-                      className="p-2 rounded-lg bg-black text-white hover:bg-black/80 transition-colors"
-                      title="Refresh Connection"
-                    >
-                      <RefreshCw size={16} className={cn(isConnected === null && "animate-spin")} />
-                    </button>
-                  </div>
-                  {isConnected === false && (
-                    <div className="p-3 rounded-lg bg-red-50 border border-red-100 space-y-2">
-                      <p className="text-[10px] text-red-600 font-medium">Impossible de contacter Ollama.</p>
-                      <ul className="text-[9px] text-red-500 list-disc ml-3 space-y-1">
-                        <li>Vérifie qu'Ollama est lancé.</li>
-                        <li><strong>CORS :</strong> Lance Ollama avec <code>OLLAMA_ORIGINS="*" ollama serve</code></li>
-                        <li><strong>Mixed Content :</strong> Ton navigateur peut bloquer HTTPS vers HTTP. Essaie d'accéder à <a href={settings.baseUrl} target="_blank" className="underline">cette URL</a> manuellement pour "autoriser" le certificat ou le contenu non sécurisé.</li>
-                      </ul>
+            <div className="flex-1 p-8 max-w-5xl mx-auto w-full overflow-y-auto custom-scrollbar">
+              <div className="flex items-center justify-between mb-8">
+                <div>
+                  <h2 className="text-2xl font-semibold">Server Administration</h2>
+                  <p className="text-sm text-black/40 mt-1">Manage your local Ollama instance, download new models, and configure connections.</p>
+                </div>
+                <button onClick={() => setShowSettings(false)} className="px-4 py-2 rounded-lg bg-black text-white hover:bg-black/80 transition-colors font-medium text-sm">
+                  Done
+                </button>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                {/* Left Column: Server Status & Pull */}
+                <div className="space-y-8">
+                  <div className="p-6 rounded-2xl bg-white border border-black/5 shadow-sm space-y-4">
+                    <h3 className="text-sm font-bold uppercase tracking-wider text-black/40 flex items-center gap-2">
+                      <Monitor size={16} /> Connection Settings
+                    </h3>
+                    <div className="space-y-2">
+                       <label className="text-[10px] font-bold text-black/40 uppercase tracking-wider">Ollama API URL</label>
+                      <div className="flex gap-2">
+                        <input 
+                          type="text" 
+                          value={settings.baseUrl}
+                          onChange={(e) => setSettings(prev => ({ ...prev, baseUrl: e.target.value }))}
+                          className="flex-1 p-2 rounded-lg border border-black/10 bg-black/[0.02] text-sm focus:outline-none focus:ring-2 focus:ring-black/5 transition-all outline-none"
+                          placeholder="http://localhost:11434"
+                        />
+                        <button 
+                          onClick={checkConnection}
+                          className="p-2 rounded-lg bg-black text-white hover:bg-black/80 transition-colors"
+                          title="Refresh Connection"
+                        >
+                          <RefreshCw size={16} className={cn(isConnected === null && "animate-spin")} />
+                        </button>
+                      </div>
                     </div>
-                  )}
+                    {/* Default Model Selection */}
+                    <div className="space-y-2 pt-2 border-t border-black/5">
+                      <label className="text-[10px] font-bold text-black/40 uppercase tracking-wider">Global Default Model</label>
+                      <select 
+                        value={settings.selectedModel}
+                        onChange={(e) => setSettings(prev => ({ ...prev, selectedModel: e.target.value }))}
+                        className="w-full p-2 rounded-lg border border-black/10 bg-black/[0.02] text-sm appearance-none outline-none focus:ring-2 focus:ring-black/5 transition-all"
+                      >
+                        <option value="" disabled>Select a model...</option>
+                        {models.map(m => <option key={m.name} value={m.name}>{m.name}</option>)}
+                      </select>
+                      <p className="text-[10px] text-black/40">This model will be used as the fallback when provisioned agents don't explicitly specify one.</p>
+                    </div>
+
+                    {isConnected === false && (
+                      <div className="p-3 rounded-lg bg-red-50 border border-red-100 space-y-2">
+                        <p className="text-[10px] text-red-600 font-bold uppercase tracking-wider">Connection Error</p>
+                        <ul className="text-[10px] text-red-700/80 list-disc ml-3 space-y-1">
+                          <li>Ensure the Ollama process is running.</li>
+                          <li><strong>CORS:</strong> Start Ollama with <code>OLLAMA_ORIGINS="*" ollama serve</code></li>
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="p-6 rounded-2xl border-2 border-dashed border-emerald-500/20 bg-emerald-50/30 space-y-4">
+                    <h3 className="text-sm font-bold uppercase tracking-wider text-emerald-800/60 flex items-center gap-2">
+                      <Download size={16} /> Pull new model
+                    </h3>
+                    <div className="flex gap-2">
+                      <input 
+                        type="text" 
+                        value={pullInput}
+                        onChange={(e) => setPullInput(e.target.value)}
+                        disabled={isPulling}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handlePullModel(); }}
+                        className="flex-1 p-2 rounded-lg border border-emerald-500/20 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/20 disabled:opacity-50 outline-none"
+                        placeholder="e.g., llama3:latest or qwen2.5:0.5b"
+                      />
+                      {isPulling ? (
+                        <button 
+                          onClick={handleAbortPull}
+                          className="px-4 py-2 rounded-lg bg-red-500 text-white hover:bg-red-600 transition-colors font-medium text-sm flex items-center gap-2"
+                        >
+                          <Square size={14} fill="currentColor" /> Stop
+                        </button>
+                      ) : (
+                        <button 
+                          onClick={handlePullModel}
+                          disabled={!pullInput.trim()}
+                          className="px-4 py-2 rounded-lg bg-emerald-500 text-white hover:bg-emerald-600 transition-colors font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Pull
+                        </button>
+                      )}
+                    </div>
+                    
+                    {pullError && (
+                      <div className="p-3 rounded-lg bg-red-50 border border-red-100 text-[10px] font-medium text-red-600 uppercase tracking-wider">
+                        {pullError}
+                      </div>
+                    )}
+
+                    <AnimatePresence>
+                      {pullProgress && (
+                        <motion.div 
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="space-y-2 mt-4 pt-4 border-t border-emerald-500/10"
+                        >
+                          <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider text-emerald-800">
+                            <span>{pullProgress.status}</span>
+                            {pullProgress.total ? (
+                              <span>
+                                {((pullProgress.completed || 0) / 1024 / 1024 / 1024).toFixed(2)} GB / 
+                                {(pullProgress.total / 1024 / 1024 / 1024).toFixed(2)} GB
+                              </span>
+                            ) : null}
+                          </div>
+                          {pullProgress.total ? (
+                            <div className="h-2 w-full bg-emerald-500/10 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-emerald-500 transition-all duration-300 ease-out"
+                                style={{ width: `${Math.min(100, Math.max(0, ((pullProgress.completed || 0) / pullProgress.total) * 100))}%` }}
+                              />
+                            </div>
+                          ) : (
+                            <div className="h-2 w-full bg-emerald-500/10 rounded-full overflow-hidden relative">
+                              <div className="absolute inset-0 bg-emerald-500/40 w-1/3 animate-[ping_2s_cubic-bezier(0,0,0.2,1)_infinite] rounded-full" />
+                            </div>
+                          )}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-medium text-black/60 uppercase tracking-wider">Select Model</label>
-                  <select 
-                    value={settings.selectedModel}
-                    onChange={(e) => setSettings(prev => ({ ...prev, selectedModel: e.target.value }))}
-                    className="w-full p-2 rounded-lg border border-black/10 bg-white text-sm appearance-none"
-                  >
-                    {models.map(m => <option key={m.name} value={m.name}>{m.name}</option>)}
-                  </select>
+
+                {/* Right Column: Installed Models */}
+                <div className="space-y-4 border border-black/5 rounded-2xl p-6 bg-black/[0.01]">
+                   <h3 className="text-sm font-bold uppercase tracking-wider text-black/40 flex items-center gap-2 mb-4">
+                      <HardDrive size={16} /> Installed Models ({models.length})
+                    </h3>
+                    <div className="space-y-3 max-h-[600px] overflow-y-auto custom-scrollbar pr-2">
+                       {models.map(m => (
+                          <div key={m.name} className="p-4 rounded-xl bg-white border border-black/5 shadow-sm flex items-center justify-between group hover:border-black/20 transition-colors">
+                            <div>
+                               <div className="font-semibold text-sm">{m.name}</div>
+                               <div className="flex items-center gap-2 mt-1 text-[10px] uppercase font-bold text-black/30 tracking-wider">
+                                  <span>{(m.size / 1024 / 1024 / 1024).toFixed(2)} GB</span>
+                                  <span>•</span>
+                                  <span>{m.details?.parameter_size || 'Unknown'} params</span>
+                               </div>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              {settings.selectedModel === m.name && (
+                                <span className="px-2 py-1 rounded bg-emerald-50 text-[10px] font-bold text-emerald-600/80 uppercase tracking-widest border border-emerald-500/10">Default</span>
+                              )}
+                              <button 
+                                onClick={() => handleDeleteModel(m.name)}
+                                className="p-2 rounded-lg text-black/20 hover:text-red-500 hover:bg-red-50 transition-all opacity-0 group-hover:opacity-100 focus:opacity-100"
+                                title="Delete Model"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </div>
+                       ))}
+                       {models.length === 0 && (
+                         <div className="text-sm font-medium text-black/40 text-center py-12 border-2 border-dashed border-black/5 rounded-xl">
+                           {isConnected ? "No models installed yet." : "Connect to Ollama to view your models."}
+                         </div>
+                       )}
+                    </div>
                 </div>
-                <button onClick={() => setShowSettings(false)} className="w-full p-2 rounded-lg bg-black text-white font-medium text-sm">Save</button>
               </div>
             </div>
           ) : view === 'agents' ? (
@@ -861,15 +1404,7 @@ export default function App() {
                                   onClick={() => toggleTaskStatus(currentSession.id, task.id)}
                                   className="mt-0.5"
                                 >
-                                  {task.status === 'done' ? (
-                                    <CheckCircle size={16} className="text-emerald-500" />
-                                  ) : task.status === 'in-progress' ? (
-                                    <PlayCircle size={16} className="text-blue-500" />
-                                  ) : task.status === 'failed' ? (
-                                    <AlertCircle size={16} className="text-red-500" />
-                                  ) : (
-                                    <Circle size={16} className="text-black/10" />
-                                  )}
+                                  <StatusIcon status={task.status} />
                                 </button>
                                 <div className="flex-1 min-w-0">
                                   <p className={cn(
@@ -948,15 +1483,41 @@ export default function App() {
                       <div className={cn("w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-[10px] font-bold", message.role === 'user' ? "bg-black text-white" : "bg-emerald-100 text-emerald-700")}>
                         {message.role === 'user' ? 'U' : 'AI'}
                       </div>
-                      <div className={cn("flex-1 px-4 py-2 rounded-2xl text-sm leading-relaxed", message.role === 'user' ? "bg-black/5 text-black" : "bg-transparent")}>
-                        <div className="markdown-body">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-                        </div>
+                      <div className={cn("flex-1 px-4 py-2 rounded-2xl text-sm leading-relaxed", 
+                        message.role === 'user' ? "bg-black/5 text-black" : "bg-transparent"
+                      )}>
+                        {message.type === 'agent-result' ? (
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2 mb-2">
+                              {message.agentId && (
+                                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-black/5 border border-black/5">
+                                  <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: currentSession?.agents.find(a => a.id === message.agentId)?.color }} />
+                                  <span className="text-[9px] font-bold uppercase text-black/60">
+                                    {currentSession?.agents.find(a => a.id === message.agentId)?.name || 'Agent'} Result
+                                  </span>
+                                </div>
+                              )}
+                              <span className="text-[9px] font-bold uppercase text-black/20">{new Date(message.timestamp).toLocaleTimeString()}</span>
+                            </div>
+                            <div className="markdown-body p-4 rounded-xl bg-black/[0.02] border border-black/5">
+                              <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+                            </div>
+                          </div>
+                        ) : (
+                          <MessageContent 
+                            content={message.content} 
+                            agents={currentSession?.agents || []} 
+                            tasks={currentSession?.tasks || []}
+                            models={models}
+                            onApproveAgent={approveAgent}
+                            onExecuteTask={executeTask}
+                          />
+                        )}
                       </div>
                     </div>
                   ))
                 )}
-                {isLoading && (
+                {isLoading && currentSession?.messages[currentSession.messages.length - 1]?.role !== 'assistant' && (
                   <div className="max-w-3xl mx-auto flex gap-4">
                     <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 text-[10px] font-bold">AI</div>
                     <div className="flex items-center gap-1">

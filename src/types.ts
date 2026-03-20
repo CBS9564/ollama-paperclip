@@ -6,6 +6,7 @@ export interface Agent {
   model: string;
   systemPrompt: string;
   color: string;
+  isPending?: boolean;
 }
 
 export interface Task {
@@ -24,6 +25,10 @@ export interface Message {
   content: string;
   id: string;
   timestamp: number;
+  type?: 'text' | 'task-list' | 'agent-result';
+  agentId?: string;
+  taskId?: string;
+  isSummary?: boolean;
 }
 
 export interface ChatSession {
@@ -55,4 +60,11 @@ export interface OllamaSettings {
   baseUrl: string;
   selectedModel: string;
   isAgentMode: boolean;
+}
+
+export interface PullProgress {
+  status: string;
+  digest?: string;
+  total?: number;
+  completed?: number;
 }

@@ -105,4 +105,97 @@ export class OllamaService {
       return false;
     }
   }
+
+  private pullAbortController: AbortController | null = null;
+
+  /**
+   * Pulls a new model from the Ollama registry (e.g., 'llama3').
+   * Emits progress updates via a callback.
+   */
+  async pullModel(model: string, onProgress: (progress: import('../types').PullProgress) => void): Promise<void> {
+    this.pullAbortController = new AbortController();
+    
+    try {
+      const response = await fetch(`${this.baseUrl}/api/pull`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: model, stream: true }),
+        signal: this.pullAbortController.signal,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Failed to pull model (${response.status})`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('No response body');
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const json = JSON.parse(line);
+            onProgress(json);
+            if (json.status === 'success') {
+              this.pullAbortController = null;
+              return;
+            }
+          } catch (e) {
+            console.error('Error parsing JSON chunk during pull:', e);
+          }
+        }
+      }
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        console.log('Model pull aborted by user');
+      } else {
+        console.error('Pull model error:', error);
+        throw error;
+      }
+    } finally {
+      this.pullAbortController = null;
+    }
+  }
+
+  /**
+   * Aborts an ongoing model pull operation.
+   */
+  abortPull() {
+    if (this.pullAbortController) {
+      this.pullAbortController.abort();
+      this.pullAbortController = null;
+    }
+  }
+
+  /**
+   * Deletes a model from the local Ollama instance.
+   */
+  async deleteModel(model: string): Promise<void> {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/delete`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: model }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Failed to delete model (${response.status})`);
+      }
+    } catch (error) {
+      console.error('Delete model error:', error);
+      throw error;
+    }
+  }
 }
