@@ -1,0 +1,8 @@
+{
+  "sessions": [],
+  "settings": {
+    "baseUrl": "http://192.168.1.106:11434",
+    "selectedModel": "erukude/multiagent-orchestrator:1b",
+    "isAgentMode": true
+  }
+}
