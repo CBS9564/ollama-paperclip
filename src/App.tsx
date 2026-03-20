@@ -524,10 +524,11 @@ export default function App() {
     return `CORE PRINCIPLES:
 1. REFLECTION: Before creating agents or tasks, think deeply about the user's intent, the domains involved, and the most efficient way to achieve the goal. Describe your reasoning in the CLASSIFY section.
 2. SPECIALIZATION: Create agents with very specific, detailed roles. Don't use generic titles.
-3. IMAGE GENERATION: We have a HIGH-PERFORMANCE NVIDIA T1000 GPU dedicated to image generation. If the project requires visuals, illustrations, or photos, ALWAYS create an agent named 'Illustrateur' and assign it a task clearly describing the image to generate. The system will automatically handle the rendering.
-4. MODEL INTELLIGENCE: Assign each agent the most suitable model from the available list below. Use larger models for complex reasoning/creative writing and smaller/faster models for specialized data extraction or formatting.
-5. COLLABORATION: Instruct agents that they can suggest task re-attribution or request clarifications in their results if they hit a blocker.
-6. LANGUAGE CONSISTENCY: ALWAYS respond and define agent prompts in the SAME LANGUAGE as the user input (e.g., if the user asks in French, everything must be in French).
+3. IMAGE GENERATION: We have a HIGH-PERFORMANCE NVIDIA T1000 GPU dedicated to image generation. If the project requires visuals, ALWAYS create an agent named 'Illustrateur' (or 'Illustrator'). IMPORTANT: Place image tasks AFTER the analysis tasks they depend on. The task title should explicitly mention dependencies (e.g., "Generate image BASED ON Stylist's color palette"). The system uses a specialized REST API that automatically enriches your prompt for the best results.
+4. CHRONOLOGY: Ensure the [PLAN] is strictly sequential. Tasks that require information from earlier agents must follow them in the list.
+5. MODEL INTELLIGENCE: Assign each agent the most suitable model from the available list below. Use larger models for complex reasoning/creative writing and smaller/faster models for specialized data extraction or formatting.
+6. COLLABORATION: Instruct agents that they can suggest task re-attribution or request clarifications in their results if they hit a blocker.
+7. LANGUAGE CONSISTENCY: ALWAYS respond and define agent prompts in the SAME LANGUAGE as the user input (e.g., if the user asks in French, everything must be in French).
 
 AVAILABLE MODELS ON THIS SERVER:
 ${modelNames || 'Standard models detected.'}
@@ -535,10 +536,10 @@ ${modelNames || 'Standard models detected.'}
 REQUIRED STRUCTURED FORMAT:
 You MUST use these tags exactly for the system to parse your plan:
 
-1. CLASSIFY: [Your reasoning and domain analysis]
+1. CLASSIFY: [Your reasoning, domain analysis, and task dependency logic]
 2. PROVISION: 
    [AGENT: Name | Detailed System Prompt | ModelName]
-   (Repeat for each agent. ModelName is optional but preferred).
+   (Repeat for each agent).
 
 3. PLAN:
    [TASK: Clear Title | Agent Name]
@@ -551,7 +552,7 @@ PROVISION:
 [AGENT: Strategiste | Vous êtes un consultant en marketing... | mistral:latest]
 PLAN:
 [TASK: Analyser les prix des concurrents | Analyste]
-[TASK: Proposer une stratégie de pénétration | Strategiste]`;
+[TASK: Proposer une stratégie de pénétration basée sur l'analyse | Strategiste]`;
   };
 
   const createNewSession = () => {
@@ -982,8 +983,8 @@ PLAN:
       let hasReceivedFirstChunk = false;
 
       // Special handling for image generation tasks
-      const isImageTask = agent.name.toLowerCase().includes('illustrateur') || 
-                         task.title.toLowerCase().match(/générer une image|dessiner|créer une illustration/);
+      const isImageTask = agent.name.toLowerCase().match(/illustrateur|illustrator/) || 
+                         task.title.toLowerCase().match(/générer une image|generate image|dessiner|draw|illustration/);
       
       if (isImageTask && !isSetupTask) {
         try {
@@ -996,11 +997,20 @@ PLAN:
           // Call the specialized image generation API
           const imageResult = await ollama.generateImage(task.title);
           
-          fullResult = `**Image générée avec succès !** 🎨\n\n![Génération](${imageResult.url})\n\n*Prompt utilisé : ${imageResult.prompt_used}*`;
+          const finalResult = `**Image générée avec succès !** 🎨\n\n![Génération](${imageResult.url})\n\n*Prompt utilisé : ${imageResult.prompt_used}*`;
           
           setSessions(prev => prev.map(s => s.id === currentSessionId ? {
             ...s,
-            tasks: s.tasks.map(t => t.id === task.id ? { ...t, status: 'done', result: fullResult, completedAt: Date.now() } : t)
+            tasks: s.tasks.map(t => t.id === task.id ? { ...t, status: 'done', result: finalResult, completedAt: Date.now() } : t),
+            messages: [...s.messages, {
+              id: crypto.randomUUID(),
+              role: 'assistant' as const,
+              type: 'agent-result' as const,
+              agentId: agent.id,
+              taskId: task.id,
+              content: finalResult,
+              timestamp: Date.now()
+            }]
           } : s));
           
           return;
@@ -1048,13 +1058,22 @@ PLAN:
         return s;
       }));
 
-      // Mark as done
+      // Mark as done and push result to chat
       setSessions(prev => {
         const nextSessions = prev.map(s => {
           if (s.id === currentSessionId) {
             return {
               ...s,
-              tasks: s.tasks.map(t => t.id === task.id ? { ...t, status: 'done' as TaskStatus, completedAt: Date.now() } : t)
+              tasks: s.tasks.map(t => t.id === task.id ? { ...t, status: 'done' as TaskStatus, completedAt: Date.now() } : t),
+              messages: [...s.messages, {
+                id: crypto.randomUUID(),
+                role: 'assistant' as const,
+                type: 'agent-result' as const,
+                agentId: agent.id,
+                taskId: task.id,
+                content: fullResult,
+                timestamp: Date.now()
+              }]
             };
           }
           return s;

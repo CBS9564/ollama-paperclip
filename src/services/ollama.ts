@@ -134,7 +134,8 @@ export class OllamaService {
     });
     
     if (!response.ok) {
-      throw new Error(`Image generation failed: ${response.statusText}`);
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(`Image generation failed: ${errorData.error || response.statusText}${errorData.details ? ` (${errorData.details})` : ''}`);
     }
     
     return await response.json();

@@ -38,17 +38,32 @@ async function startServer() {
 
   // Image Generation Proxy
   app.post("/api/generate-image", async (req, res) => {
+    const start = Date.now();
+    console.log(`[PROXY] Starting image generation for prompt: "${req.body.prompt?.slice(0, 50)}..."`);
+    
     try {
       const response = await fetch("http://192.168.1.106:5000/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(req.body)
+        body: JSON.stringify(req.body),
+        // No explicit timeout here, use the default
       });
+      
+      console.log(`[PROXY] VM Response Status: ${response.status} ${response.statusText}`);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[PROXY] VM Error Body:`, errorText);
+        return res.status(response.status).json({ error: `VM returned ${response.status}: ${response.statusText}`, details: errorText });
+      }
+
       const data = await response.json();
+      const duration = ((Date.now() - start) / 1000).toFixed(1);
+      console.log(`[PROXY] Success! Generation took ${duration}s. URL: ${data.url}`);
       res.json(data);
-    } catch (error) {
-      console.error("Image generation proxy error:", error);
-      res.status(500).json({ error: "Failed to generate image via VM" });
+    } catch (error: any) {
+      console.error("[PROXY] Connection Error:", error.message);
+      res.status(500).json({ error: "Failed to connect to Image VM", details: error.message });
     }
   });
 
