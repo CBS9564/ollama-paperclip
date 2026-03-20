@@ -38,8 +38,9 @@ export class OllamaService {
    * @param onChunk - Callback function triggered for each received text fragment.
    * @param systemPrompt - Optional system instructions to guide the model's persona.
    * @param signal - Optional AbortSignal to cancel the request.
+   * @param options - Optional advanced parameters like temperature and context size.
    */
-  async chat(model: string, messages: Message[], onChunk: (chunk: string) => void, systemPrompt?: string, signal?: AbortSignal): Promise<void> {
+  async chat(model: string, messages: Message[], onChunk: (chunk: string) => void, systemPrompt?: string, signal?: AbortSignal, options?: { temperature?: number, num_ctx?: number }): Promise<void> {
     const formattedMessages = messages.map(({ role, content }) => ({ role, content }));
     
     if (systemPrompt) {
@@ -54,6 +55,7 @@ export class OllamaService {
           model,
           messages: formattedMessages,
           stream: true,
+          options
         }),
         signal,
       });

@@ -6,6 +6,8 @@ export interface Agent {
   model: string;
   systemPrompt: string;
   color: string;
+  temperature?: number;
+  num_ctx?: number;
   isPending?: boolean;
 }
 

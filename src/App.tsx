@@ -39,14 +39,16 @@ import { OllamaService } from './services/ollama';
  * Extracts agent definitions from raw text using [AGENT: Name | Prompt] format.
  * Resilient to multi-line content and missing separators.
  */
-const parseAgentsFromContent = (content: string): { name: string, prompt: string, model?: string }[] => {
-  // Support [AGENT: Name | Prompt | Model] or [AGENT: Name | Prompt]
-  const agentRegex = /\[AGENT\s*:\s*([\s\S]*?)(?:\s*\|\s*([\s\S]*?))?(?:\s*\|\s*([\s\S]*?))?\]/gi;
+const parseAgentsFromContent = (content: string): { name: string, prompt: string, model?: string, temperature?: number, num_ctx?: number }[] => {
+  // Support [AGENT: Name | Prompt | Model | Temp | Ctx] where earlier props are required for later ones
+  const agentRegex = /\[AGENT\s*:\s*([^|\]]*?)(?:\s*\|\s*([^|\]]*?))?(?:\s*\|\s*([^|\]]*?))?(?:\s*\|\s*([^|\]]*?))?(?:\s*\|\s*([^|\]]*?))?\]/gi;
   const matches = [...content.matchAll(agentRegex)];
   return matches.map(m => ({ 
-    name: m[1].trim(), 
+    name: m[1]?.trim() || 'Unknown', 
     prompt: m[2]?.trim() || 'You are a helpful AI assistant.',
-    model: m[3]?.trim()
+    model: m[3]?.trim() || undefined,
+    temperature: m[4]?.trim() ? parseFloat(m[4].trim()) : 0.7,
+    num_ctx: m[5]?.trim() ? parseInt(m[5].trim(), 10) : 4096
   }));
 };
 
@@ -104,6 +106,8 @@ const MessageContent = React.memo(({
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [editPrompt, setEditPrompt] = useState('');
   const [editModel, setEditModel] = useState('');
+  const [editTemp, setEditTemp] = useState<number>(0.7);
+  const [editCtx, setEditCtx] = useState<number>(4096);
 
   return (
     <div className="space-y-4">
@@ -140,6 +144,8 @@ const MessageContent = React.memo(({
                         setEditingAgentId(liveAgent.id);
                         setEditPrompt(liveAgent.systemPrompt);
                         setEditModel(liveAgent.model);
+                        setEditTemp(liveAgent.temperature ?? 0.7);
+                        setEditCtx(liveAgent.num_ctx ?? 4096);
                       }}
                       className="p-2 hover:bg-amber-500/10 rounded-lg text-amber-600 transition-colors"
                     >
@@ -169,10 +175,36 @@ const MessageContent = React.memo(({
                         className="w-full p-2 rounded-lg bg-white border border-black/5 text-xs outline-none focus:ring-2 focus:ring-amber-500/20 resize-none"
                       />
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex gap-4">
+                      <div className="space-y-1.5 flex-1">
+                        <label className="text-[10px] font-bold uppercase text-black/40 flex justify-between">
+                          <span>Temperature</span>
+                          <span className="text-amber-600">{editTemp.toFixed(1)}</span>
+                        </label>
+                        <input 
+                          type="range" min="0" max="1" step="0.1" 
+                          value={editTemp} onChange={(e) => setEditTemp(parseFloat(e.target.value))}
+                          className="w-full accent-amber-500" 
+                        />
+                      </div>
+                      <div className="space-y-1.5 flex-1">
+                        <label className="text-[10px] font-bold uppercase text-black/40">Context Size</label>
+                        <select 
+                          value={editCtx} onChange={(e) => setEditCtx(parseInt(e.target.value, 10))}
+                          className="w-full p-2 rounded-lg bg-white border border-black/5 text-xs outline-none focus:ring-2 focus:ring-amber-500/20"
+                        >
+                          <option value={2048}>2048 tokens</option>
+                          <option value={4096}>4096 tokens</option>
+                          <option value={8192}>8192 tokens</option>
+                          <option value={16384}>16384 tokens</option>
+                          <option value={32768}>32768 tokens</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 pt-2">
                       <button 
                         onClick={() => {
-                          onApproveAgent(liveAgent.id, { systemPrompt: editPrompt, model: editModel });
+                          onApproveAgent(liveAgent.id, { systemPrompt: editPrompt, model: editModel, temperature: editTemp, num_ctx: editCtx });
                           setEditingAgentId(null);
                         }}
                         className="flex-1 py-2 rounded-lg bg-amber-500 text-white text-xs font-bold uppercase tracking-wider hover:bg-amber-600 transition-colors"
@@ -502,7 +534,9 @@ PLAN:
           name: 'Orchestrator',
           model: settings.selectedModel,
           systemPrompt: getOrchestratorPrompt(models),
-          color: '#10b981'
+          color: '#10b981',
+          temperature: 0.7,
+          num_ctx: 8192
         }
       ],
       model: settings.selectedModel,
@@ -613,7 +647,7 @@ PLAN:
           lastUpdateTime = now;
           updateAssistantMessage(targetSessionId!, accumulatedContent, isAgentModeAtStart);
         }
-      }, systemPrompt, abortControllerRef.current.signal);
+      }, systemPrompt, abortControllerRef.current.signal, { temperature: orchestrator?.temperature ?? 0.7, num_ctx: orchestrator?.num_ctx ?? 4096 });
       
       updateAssistantMessage(targetSessionId!, accumulatedContent, isAgentModeAtStart);
     } catch (error: any) {
@@ -657,6 +691,8 @@ PLAN:
                 model: suggested.model || settings.selectedModel,
                 systemPrompt: suggested.prompt,
                 color: colors[updatedAgents.length % colors.length],
+                temperature: suggested.temperature ?? 0.7,
+                num_ctx: suggested.num_ctx ?? 4096,
                 isPending: true // New agents start as pending
               });
 
@@ -823,7 +859,7 @@ PLAN:
       await ollama.chat(orchestrator?.model || settings.selectedModel, [...session.messages, { id: 'summary-user', role: 'user', content: prompt, timestamp: Date.now() }], (chunk) => {
         accumulated += chunk;
         updateAssistantMessage(sessionId, accumulated, false);
-      }, orchestrator?.systemPrompt);
+      }, orchestrator?.systemPrompt, undefined, { temperature: orchestrator?.temperature ?? 0.7, num_ctx: orchestrator?.num_ctx ?? 4096 });
     } catch (err) {
       console.error('Final summary generation failed:', err);
     } finally {
@@ -918,7 +954,7 @@ PLAN:
             return s;
           }));
         }
-      }, agent.systemPrompt, abortControllerRef.current.signal);
+      }, agent.systemPrompt, abortControllerRef.current.signal, { temperature: agent.temperature ?? 0.7, num_ctx: agent.num_ctx ?? 4096 });
 
       // Final update
       setSessions(prev => prev.map(s => {
@@ -1362,6 +1398,34 @@ PLAN:
                           className="w-full p-3 rounded-xl bg-black/[0.02] border border-black/5 text-sm focus:outline-none focus:border-black/10 transition-colors resize-none"
                           placeholder="Define the agent's behavior..."
                         />
+                      </div>
+                      <div className="flex gap-4">
+                        <div className="space-y-1.5 flex-1">
+                          <label className="text-[10px] font-bold uppercase text-black/30 flex justify-between tracking-widest">
+                            <span>Temperature</span>
+                            <span className="text-emerald-600">{(agent.temperature ?? 0.7).toFixed(1)}</span>
+                          </label>
+                          <input 
+                            type="range" min="0" max="1" step="0.1" 
+                            value={agent.temperature ?? 0.7} 
+                            onChange={(e) => updateAgent(agent.id, { temperature: parseFloat(e.target.value) })}
+                            className="w-full accent-emerald-500" 
+                          />
+                        </div>
+                        <div className="space-y-1.5 flex-1">
+                          <label className="text-[10px] font-bold uppercase text-black/30 tracking-widest">Context Size</label>
+                          <select 
+                            value={agent.num_ctx ?? 4096} 
+                            onChange={(e) => updateAgent(agent.id, { num_ctx: parseInt(e.target.value, 10) })}
+                            className="w-full p-2 rounded-lg border border-black/5 bg-black/[0.02] text-xs outline-none focus:ring-2 focus:ring-emerald-500/20"
+                          >
+                            <option value={2048}>2048 tokens</option>
+                            <option value={4096}>4096 tokens</option>
+                            <option value={8192}>8192 tokens</option>
+                            <option value={16384}>16384 tokens</option>
+                            <option value={32768}>32768 tokens</option>
+                          </select>
+                        </div>
                       </div>
                     </div>
                   ))}
