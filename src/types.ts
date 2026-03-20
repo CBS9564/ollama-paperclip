@@ -20,6 +20,7 @@ export interface Task {
   completedAt?: number;
   agentId?: string; // ID of the agent assigned
   result?: string; // Output from the agent execution
+  isLoadingModel?: boolean; // True when Ollama is swapping models
 }
 
 export interface Message {

@@ -327,6 +327,19 @@ const MessageContent = React.memo(({
                 </div>
               </div>
 
+              {liveTask?.isLoadingModel && (
+                <motion.div 
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  className="mt-3 p-3 rounded-lg bg-blue-50/50 border border-blue-500/10 flex items-center gap-3 overflow-hidden"
+                >
+                  <RefreshCw size={14} className="text-blue-500 animate-spin" />
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-blue-700/80">
+                    Loading model into VRAM...
+                  </span>
+                </motion.div>
+              )}
+
               {isExpanded && liveTask?.result && (
                 <motion.div 
                   initial={{ height: 0, opacity: 0 }}
@@ -936,9 +949,28 @@ PLAN:
       
       const modelToUse = agent.model || settings.selectedModel;
       
+      const loadedModels = await ollama.getLoadedModels();
+      const isLoaded = loadedModels.includes(modelToUse) || loadedModels.some(m => m.startsWith(modelToUse));
+      
+      if (!isLoaded) {
+        setSessions(prev => prev.map(s => s.id === currentSessionId ? {
+          ...s,
+          tasks: s.tasks.map(t => t.id === task.id ? { ...t, isLoadingModel: true } : t)
+        } : s));
+      }
+
       let lastUpdateTime = Date.now();
+      let hasReceivedFirstChunk = false;
 
       await ollama.chat(modelToUse, [{ id: '1', role: 'user', content: prompt, timestamp: Date.now() }], (chunk) => {
+        if (!hasReceivedFirstChunk && !isLoaded) {
+          hasReceivedFirstChunk = true;
+          setSessions(prev => prev.map(s => s.id === currentSessionId ? {
+            ...s,
+            tasks: s.tasks.map(t => t.id === task.id ? { ...t, isLoadingModel: false } : t)
+          } : s));
+        }
+        
         fullResult += chunk;
 
         const now = Date.now();
@@ -991,6 +1023,12 @@ PLAN:
         return nextSessions;
       });
     } catch (error: any) {
+      // Ensure loading state is cleared on error
+      setSessions(prev => prev.map(s => s.id === currentSessionId ? {
+        ...s,
+        tasks: s.tasks.map(t => t.id === task.id ? { ...t, isLoadingModel: false } : t)
+      } : s));
+
       if (error.name === 'AbortError') {
         setSessions(prev => prev.map(s => {
           if (s.id === currentSessionId) {

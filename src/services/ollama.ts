@@ -32,6 +32,24 @@ export class OllamaService {
   }
 
   /**
+   * Retrieves the list of models currently loaded in Ollama's memory.
+   * @returns A promise that resolves to an array of model names.
+   */
+  async getLoadedModels(): Promise<string[]> {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/ps`, {
+        mode: 'cors',
+        headers: { 'Accept': 'application/json' }
+      });
+      if (!response.ok) return [];
+      const data = await response.json();
+      return (data.models || []).map((m: any) => m.name);
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /**
    * Initiates a streaming chat request to Ollama.
    * @param model - The name of the model to use (e.g., 'llama3').
    * @param messages - The message history including the current user prompt.
@@ -62,6 +80,10 @@ export class OllamaService {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
+        if (errorData.error?.includes('does not support chat')) {
+          console.warn(`Model ${model} does not support /api/chat. Falling back to /api/generate.`);
+          return this.generateFallback(model, messages, onChunk, systemPrompt, signal, options);
+        }
         throw new Error(errorData.error || `Failed to communicate with Ollama (${response.status})`);
       }
 
@@ -95,6 +117,66 @@ export class OllamaService {
       }
     } catch (error) {
       console.error('Chat error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Fallback method using /api/generate for models that don't support chat templates (e.g., image models, base models).
+   */
+  private async generateFallback(model: string, messages: Message[], onChunk: (chunk: string) => void, systemPrompt?: string, signal?: AbortSignal, options?: any): Promise<void> {
+    // Flatten messages into a single prompt string
+    let prompt = systemPrompt ? `System: ${systemPrompt}\n\n` : '';
+    prompt += messages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
+    prompt += '\n\nASSISTANT:';
+
+    try {
+      const response = await fetch(`${this.baseUrl}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          prompt,
+          stream: true,
+          options
+        }),
+        signal,
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(`Ollama generate error: ${response.status} - ${err.error || ''}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('No response body for /api/generate');
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const json = JSON.parse(line);
+            if (json.response) {
+              onChunk(json.response);
+            }
+            if (json.done) return;
+          } catch (e) {
+            console.error('Error parsing JSON chunk from /api/generate:', e);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Generate fallback error:', error);
       throw error;
     }
   }
