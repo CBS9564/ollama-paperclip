@@ -320,8 +320,18 @@ const MessageContent = React.memo(({
                     <button 
                       onClick={() => onExecuteTask(liveTask)}
                       className="p-2 rounded-lg bg-black/5 hover:bg-black text-black/40 hover:text-white transition-all shadow-sm"
+                      title="Start Task"
                     >
                       <Play size={12} />
+                    </button>
+                  )}
+                  {liveTask && liveTask.status === 'failed' && (
+                    <button 
+                      onClick={() => onExecuteTask(liveTask)}
+                      className="p-2 rounded-lg bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white transition-all shadow-sm"
+                      title="Retry Task"
+                    >
+                      <RefreshCw size={12} />
                     </button>
                   )}
                 </div>
@@ -927,7 +937,7 @@ PLAN:
       if (s.id === currentSessionId) {
         return {
           ...s,
-          tasks: s.tasks.map(t => t.id === task.id ? { ...t, status: 'in-progress' } : t)
+          tasks: s.tasks.map(t => t.id === task.id ? { ...t, status: 'in-progress', result: '' } : t)
         };
       }
       return s;

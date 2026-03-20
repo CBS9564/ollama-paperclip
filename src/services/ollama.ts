@@ -166,9 +166,21 @@ export class OllamaService {
           if (!line.trim()) continue;
           try {
             const json = JSON.parse(line);
+            
             if (json.response) {
               onChunk(json.response);
             }
+            
+            // Handle experimental text-to-image base64 payloads
+            if (json.image && typeof json.image === 'string') {
+              onChunk(`\n\n![Generated Image](data:image/png;base64,${json.image})\n\n`);
+            }
+            if (json.images && Array.isArray(json.images)) {
+              json.images.forEach((imgBase64: string) => {
+                onChunk(`\n\n![Generated Image](data:image/png;base64,${imgBase64})\n\n`);
+              });
+            }
+
             if (json.done) return;
           } catch (e) {
             console.error('Error parsing JSON chunk from /api/generate:', e);
