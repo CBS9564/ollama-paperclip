@@ -383,6 +383,7 @@ export default function App() {
     isAgentMode: false,
   });
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
+  const [hasLoaded, setHasLoaded] = useState(false);
 
   // Model Manager State
   const [pullInput, setPullInput] = useState('');
@@ -393,7 +394,9 @@ export default function App() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const isExecutingTaskRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const ollama = new OllamaService(settings.baseUrl);
+  
+  // Memoize service to prevent it from resetting on every render
+  const ollama = React.useMemo(() => new OllamaService(settings.baseUrl), [settings.baseUrl]);
 
   const handlePullModel = async () => {
     if (!pullInput.trim() || isPulling) return;
@@ -467,6 +470,8 @@ export default function App() {
         }
       } catch (error) {
         console.error('Failed to load data from server:', error);
+      } finally {
+        setHasLoaded(true);
       }
     };
     loadData();
@@ -487,11 +492,14 @@ export default function App() {
 
   // Auto-save on changes
   useEffect(() => {
+    // PREVENT SAVING BEFORE INITIAL LOAD (Race condition fix)
+    if (!hasLoaded) return;
+
     const timer = setTimeout(() => {
       saveData(sessions, settings);
     }, 1000); // Debounce save
     return () => clearTimeout(timer);
-  }, [sessions, settings]);
+  }, [sessions, settings, hasLoaded]);
 
   useEffect(() => {
     checkConnection();
