@@ -40,8 +40,8 @@ import { OllamaService } from './services/ollama';
  * Resilient to multi-line content and missing separators.
  */
 const parseAgentsFromContent = (content: string): { name: string, prompt: string, model?: string, temperature?: number, num_ctx?: number }[] => {
-  // Support [AGENT: Name | Prompt | Model | Temp | Ctx] where earlier props are required for later ones
-  const agentRegex = /\[AGENT\s*:\s*([^|\]]*?)(?:\s*\|\s*([^|\]]*?))?(?:\s*\|\s*([^|\]]*?))?(?:\s*\|\s*([^|\]]*?))?(?:\s*\|\s*([^|\]]*?))?\]/gi;
+  // Use [^|\]]+ to capture properties between pipes and closing brackets.
+  const agentRegex = /\[AGENT\s*:\s*([^|\]]+?)(?:\s*\|\s*([^|\]]+?))?(?:\s*\|\s*([^|\]]+?))?(?:\s*\|\s*([^|\]]+?))?(?:\s*\|\s*([^|\]]+?))?\]/gi;
   const matches = [...content.matchAll(agentRegex)];
   return matches.map(m => ({ 
     name: m[1]?.trim() || 'Unknown', 
@@ -57,7 +57,7 @@ const parseAgentsFromContent = (content: string): { name: string, prompt: string
  * Supports optional agent assignment and case-insensitive tags.
  */
 const parseTasksFromContent = (content: string): { title: string, agentName: string }[] => {
-  const taskRegex = /\[TASK\s*:\s*([\s\S]*?)(?:\s*\|\s*([\s\S]*?))?\]/gi;
+  const taskRegex = /\[TASK\s*:\s*([^|\]]+?)(?:\s*\|\s*([^|\]]+?))?\]/gi;
   const matches = [...content.matchAll(taskRegex)];
   return matches.map(m => ({ title: m[1].trim(), agentName: m[2]?.trim() || '' }));
 };
