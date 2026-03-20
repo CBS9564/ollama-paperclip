@@ -36,6 +36,22 @@ async function startServer() {
     }
   });
 
+  // Image Generation Proxy
+  app.post("/api/generate-image", async (req, res) => {
+    try {
+      const response = await fetch("http://192.168.1.106:5000/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(req.body)
+      });
+      const data = await response.json();
+      res.json(data);
+    } catch (error) {
+      console.error("Image generation proxy error:", error);
+      res.status(500).json({ error: "Failed to generate image via VM" });
+    }
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

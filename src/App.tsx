@@ -523,10 +523,11 @@ export default function App() {
     const modelNames = availableModels.map(m => m.name).join(', ');
     return `CORE PRINCIPLES:
 1. REFLECTION: Before creating agents or tasks, think deeply about the user's intent, the domains involved, and the most efficient way to achieve the goal. Describe your reasoning in the CLASSIFY section.
-2. SPECIALIZATION: Create agents with very specific, detailed roles. Don't use generic titles. Define their expertise, tone, and constraints in their system prompt.
-3. MODEL INTELLIGENCE: Assign each agent the most suitable model from the available list below. Use larger models for complex reasoning/creative writing and smaller/faster models for specialized data extraction or formatting.
-4. COLLABORATION: Instruct agents that they can suggest task re-attribution or request clarifications in their results if they hit a blocker.
-5. LANGUAGE CONSISTENCY: ALWAYS respond and define agent prompts in the SAME LANGUAGE as the user input (e.g., if the user asks in French, everything must be in French).
+2. SPECIALIZATION: Create agents with very specific, detailed roles. Don't use generic titles.
+3. IMAGE GENERATION: We have a HIGH-PERFORMANCE NVIDIA T1000 GPU dedicated to image generation. If the project requires visuals, illustrations, or photos, ALWAYS create an agent named 'Illustrateur' and assign it a task clearly describing the image to generate. The system will automatically handle the rendering.
+4. MODEL INTELLIGENCE: Assign each agent the most suitable model from the available list below. Use larger models for complex reasoning/creative writing and smaller/faster models for specialized data extraction or formatting.
+5. COLLABORATION: Instruct agents that they can suggest task re-attribution or request clarifications in their results if they hit a blocker.
+6. LANGUAGE CONSISTENCY: ALWAYS respond and define agent prompts in the SAME LANGUAGE as the user input (e.g., if the user asks in French, everything must be in French).
 
 AVAILABLE MODELS ON THIS SERVER:
 ${modelNames || 'Standard models detected.'}
@@ -979,6 +980,36 @@ PLAN:
 
       let lastUpdateTime = Date.now();
       let hasReceivedFirstChunk = false;
+
+      // Special handling for image generation tasks
+      const isImageTask = agent.name.toLowerCase().includes('illustrateur') || 
+                         task.title.toLowerCase().match(/générer une image|dessiner|créer une illustration/);
+      
+      if (isImageTask && !isSetupTask) {
+        try {
+          // Update status to show generation in progress
+          setSessions(prev => prev.map(s => s.id === currentSessionId ? {
+            ...s,
+            tasks: s.tasks.map(t => t.id === task.id ? { ...t, result: '🎨 Generant l\'image sur le GPU NVIDIA T1000...' } : t)
+          } : s));
+
+          // Call the specialized image generation API
+          const imageResult = await ollama.generateImage(task.title);
+          
+          fullResult = `**Image générée avec succès !** 🎨\n\n![Génération](${imageResult.url})\n\n*Prompt utilisé : ${imageResult.prompt_used}*`;
+          
+          setSessions(prev => prev.map(s => s.id === currentSessionId ? {
+            ...s,
+            tasks: s.tasks.map(t => t.id === task.id ? { ...t, status: 'done', result: fullResult, completedAt: Date.now() } : t)
+          } : s));
+          
+          return;
+        } catch (imageError: any) {
+          console.error('Image generation error:', imageError);
+          // Fallback to standard chat if image generation fails, but alert the user
+          fullResult = `❌ Erreur lors de la génération d'image : ${imageError.message}. Tentative de description textuelle...`;
+        }
+      }
 
       await ollama.chat(modelToUse, [{ id: '1', role: 'user', content: prompt, timestamp: Date.now() }], (chunk) => {
         if (!hasReceivedFirstChunk && !isLoaded) {

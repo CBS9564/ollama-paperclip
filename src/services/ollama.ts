@@ -122,7 +122,27 @@ export class OllamaService {
   }
 
   /**
-   * Fallback method using /api/generate for models that don't support chat templates (e.g., image models, base models).
+   * Generates an image using a backend proxy.
+   * @param prompt The text prompt for image generation.
+   * @returns A promise that resolves to an object containing the image URL and the prompt used.
+   */
+  async generateImage(prompt: string): Promise<{ url: string, prompt_used: string }> {
+    const response = await fetch("/api/generate-image", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Image generation failed: ${response.statusText}`);
+    }
+    
+    return await response.json();
+  }
+
+  /**
+   * Private helper for models that don't support the /api/chat endpoint.
+   * Flattens history and uses /api/generate.
    */
   private async generateFallback(model: string, messages: Message[], onChunk: (chunk: string) => void, systemPrompt?: string, signal?: AbortSignal, options?: any): Promise<void> {
     // Flatten messages into a single prompt string
