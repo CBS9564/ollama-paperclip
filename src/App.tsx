@@ -158,18 +158,29 @@ export default function App() {
     }
   };
 
+  /**
+   * Extracts agent definitions from raw text using [AGENT: Name | Prompt] format.
+   * Resilient to multi-line content and missing separators.
+   */
   const parseAgentsFromContent = (content: string): { name: string, prompt: string }[] => {
     const agentRegex = /\[AGENT:\s*([\s\S]*?)(?:\s*\|\s*([\s\S]*?))?\]/gi;
     const matches = [...content.matchAll(agentRegex)];
     return matches.map(m => ({ name: m[1].trim(), prompt: m[2]?.trim() || 'You are a helpful AI assistant.' }));
   };
 
+  /**
+   * Extracts task definitions from raw text using [TASK: Title | Agent] format.
+   * Supports optional agent assignment and case-insensitive tags.
+   */
   const parseTasksFromContent = (content: string): { title: string, agentName: string }[] => {
     const taskRegex = /\[TASK:\s*([\s\S]*?)(?:\s*\|\s*([\s\S]*?))?\]/gi;
     const matches = [...content.matchAll(taskRegex)];
     return matches.map(m => ({ title: m[1].trim(), agentName: m[2]?.trim() || '' }));
   };
 
+  /**
+   * Aborts the current LLM generation or task execution.
+   */
   const handleStop = () => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -179,6 +190,10 @@ export default function App() {
     isExecutingTaskRef.current = false;
   };
 
+  /**
+   * Orchestrates the primary chat flow. 
+   * In Agent Mode, it also triggers the parsing of agents and tasks from the output.
+   */
   const handleSend = async () => {
     if (isLoading) {
       handleStop();
@@ -426,6 +441,10 @@ export default function App() {
     }));
   };
 
+  /**
+   * Executes a specific task using its assigned agent's persona.
+   * Injects results of previous successful tasks as context.
+   */
   const executeTask = async (task: Task) => {
     if (!currentSessionId || isExecutingTaskRef.current) return;
     

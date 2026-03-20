@@ -1,5 +1,9 @@
 import { OllamaModel, Message } from '../types';
 
+/**
+ * Service to interact with a local Ollama instance.
+ * Handles model listing, streaming chat, and connection health checks.
+ */
 export class OllamaService {
   private baseUrl: string;
 
@@ -7,6 +11,10 @@ export class OllamaService {
     this.baseUrl = baseUrl.replace(/\/$/, '');
   }
 
+  /**
+   * Fetches the list of available models from the Ollama server.
+   * @returns A promise that resolves to an array of OllamaModel objects.
+   */
   async listModels(): Promise<OllamaModel[]> {
     try {
       const response = await fetch(`${this.baseUrl}/api/tags`, {
@@ -23,6 +31,14 @@ export class OllamaService {
     }
   }
 
+  /**
+   * Initiates a streaming chat request to Ollama.
+   * @param model - The name of the model to use (e.g., 'llama3').
+   * @param messages - The message history including the current user prompt.
+   * @param onChunk - Callback function triggered for each received text fragment.
+   * @param systemPrompt - Optional system instructions to guide the model's persona.
+   * @param signal - Optional AbortSignal to cancel the request.
+   */
   async chat(model: string, messages: Message[], onChunk: (chunk: string) => void, systemPrompt?: string, signal?: AbortSignal): Promise<void> {
     const formattedMessages = messages.map(({ role, content }) => ({ role, content }));
     
