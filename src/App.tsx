@@ -300,31 +300,46 @@ export default function App() {
           const suggestedTasks = parseTasksFromContent(fullContent);
           
           let updatedAgents = [...s.agents];
+          let updatedTasks = [...s.tasks];
           const colors = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#ef4444'];
           
           suggestedAgents.forEach(suggested => {
-            if (!updatedAgents.find(a => a.name.toLowerCase() === suggested.name.toLowerCase())) {
+            const agentName = suggested.name.trim();
+            if (!updatedAgents.find(a => a.name.toLowerCase() === agentName.toLowerCase())) {
               updatedAgents.push({
                 id: crypto.randomUUID(),
-                name: suggested.name,
+                name: agentName,
                 model: settings.selectedModel,
                 systemPrompt: suggested.prompt,
                 color: colors[updatedAgents.length % colors.length]
               });
+
+              // Add agent creation task assigned to orchestrator
+              const agentCreationTaskTitle = `(Setup) Initialize Agent: ${agentName}`;
+              if (!updatedTasks.find(t => t.title === agentCreationTaskTitle)) {
+                updatedTasks.push({
+                  id: crypto.randomUUID(),
+                  title: agentCreationTaskTitle,
+                  status: 'todo' as TaskStatus,
+                  createdAt: Date.now(),
+                  agentId: 'orchestrator'
+                });
+              }
             }
           });
 
-          const existingTaskTitles = s.tasks.map(t => t.title);
-          const tasksToAdd = suggestedTasks
-            .filter(st => !existingTaskTitles.includes(st.title))
+          const existingTaskTitles = updatedTasks.map(t => t.title);
+          const newTasks = suggestedTasks
+            .filter(st => !existingTaskTitles.includes(st.title.trim()))
             .map(st => {
-              const assignedAgent = updatedAgents.find(a => a.name.toLowerCase() === st.agentName.toLowerCase());
+              const agentName = st.agentName.trim().toLowerCase();
+              const assignedAgent = updatedAgents.find(a => a.name.toLowerCase() === agentName);
               return {
                 id: crypto.randomUUID(),
-                title: st.title,
+                title: st.title.trim(),
                 status: 'todo' as TaskStatus,
                 createdAt: Date.now(),
-                agentId: assignedAgent?.id
+                agentId: assignedAgent?.id || 'orchestrator' // Fallback to orchestrator if unassigned
               };
             });
 
@@ -332,7 +347,7 @@ export default function App() {
             ...s,
             messages,
             agents: updatedAgents,
-            tasks: [...s.tasks, ...tasksToAdd]
+            tasks: [...updatedTasks, ...newTasks]
           };
         }
 
@@ -477,7 +492,10 @@ export default function App() {
         .map(t => `Task: ${t.title}\nResult: ${t.result}`)
         .join('\n\n');
 
-      const prompt = `CONTEXT OF COMPLETED TASKS:\n${previousResults || 'No tasks completed yet.'}\n\nCURRENT TASK TO EXECUTE:\n${task.title}\n\nPlease execute this task and provide the result based on the context above if relevant.`;
+      const isSetupTask = task.title.startsWith('(Setup) Initialize Agent:');
+      const prompt = isSetupTask 
+        ? `TASK: ${task.title}\n\nPlease confirm that you have initialized the agent described. Briefly state its specialized role.`
+        : `CONTEXT OF COMPLETED TASKS:\n${previousResults || 'No tasks completed yet.'}\n\nCURRENT TASK TO EXECUTE:\n${task.title}\n\nPlease execute this task and provide the result based on the context above if relevant.`;
       
       const modelToUse = agent.model || settings.selectedModel;
       
