@@ -138,6 +138,13 @@ export class OllamaService {
       const errorData = await response.json().catch(() => ({}));
       throw new Error(`Image generation failed: ${errorData.error || response.statusText}${errorData.details ? ` (${errorData.details})` : ''}`);
     }
+
+    const contentType = response.headers.get('content-type');
+    
+    // Fallback if the API returned a standard JSON instead of a stream
+    if (contentType?.includes('application/json')) {
+      return await response.json();
+    }
     
     const reader = response.body?.getReader();
     if (!reader) throw new Error('No response body from image generation API');

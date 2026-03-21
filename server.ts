@@ -39,7 +39,7 @@ async function startServer() {
   // Image Generation Proxy
   app.post("/api/generate-image", async (req, res) => {
     const start = Date.now();
-    console.log(`[PROXY] Starting streaming image generation for prompt: "${req.body.prompt?.slice(0, 50)}..."`);
+    console.log(`[PROXY] Starting image generation for prompt: "${req.body.prompt?.slice(0, 50)}..."`);
     
     try {
       const response = await fetch("http://192.168.1.106:5000/generate", {
@@ -48,17 +48,16 @@ async function startServer() {
         body: JSON.stringify(req.body),
       });
       
-      console.log(`[PROXY] VM Response Status: ${response.status}`);
+      // Pass through the content type from the VM (could be SSE or JSON)
+      const contentType = response.headers.get('content-type');
+      if (contentType) {
+        res.setHeader('Content-Type', contentType);
+      }
       
       if (!response.ok) {
         const errorText = await response.text();
         return res.status(response.status).json({ error: `VM returned ${response.status}`, details: errorText });
       }
-
-      // Set headers for SSE
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
 
       if (!response.body) {
         throw new Error("No response body from VM");
@@ -74,7 +73,7 @@ async function startServer() {
       }
       
       const duration = ((Date.now() - start) / 1000).toFixed(1);
-      console.log(`[PROXY] Streaming completed in ${duration}s`);
+      console.log(`[PROXY] Request completed in ${duration}s (Type: ${contentType})`);
       res.end();
     } catch (error: any) {
       console.error("[PROXY] Connection Error:", error.message);
