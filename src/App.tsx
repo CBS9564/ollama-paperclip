@@ -976,29 +976,49 @@ PLAN:
       
       if (isImageTask && !isSetupTask) {
         try {
-          // Update status to show generation in progress
+          // Generate a unique ID for the "Generation" message so we can update it
+          const progressMsgId = crypto.randomUUID();
+          
+          // 1. Initial status update and push "Generation in Progress" message to chat
           setSessions(prev => prev.map(s => s.id === currentSessionId ? {
             ...s,
-            tasks: s.tasks.map(t => t.id === task.id ? { ...t, result: '🎨 Generant l\'image sur le GPU NVIDIA T1000...' } : t)
-          } : s));
-
-          // Call the specialized image generation API
-          const imageResult = await ollama.generateImage(task.title);
-          
-          const finalResult = `**Image générée avec succès !** 🎨\n\n![Génération](${imageResult.url})\n\n*Prompt utilisé : ${imageResult.prompt_used}*`;
-          
-          setSessions(prev => prev.map(s => s.id === currentSessionId ? {
-            ...s,
-            tasks: s.tasks.map(t => t.id === task.id ? { ...t, status: 'done', result: finalResult, completedAt: Date.now() } : t),
+            tasks: s.tasks.map(t => t.id === task.id ? { ...t, result: '🎨 Préparation de la génération sur le GPU...' } : t),
             messages: [...s.messages, {
-              id: crypto.randomUUID(),
+              id: progressMsgId,
               role: 'assistant' as const,
               type: 'agent-result' as const,
               agentId: agent.id,
               taskId: task.id,
-              content: finalResult,
+              content: '🎨 **Génération de l\'image en cours...**\n\nChargement du modèle Stable Diffusion Realistic Vision V5.1 sur le GPU NVIDIA T1000.\n\n⌛ *Temps estimé : 10-15 secondes*',
               timestamp: Date.now()
             }]
+          } : s));
+
+          // 2. Simple simulation of progress for the Task tab result
+          let progress = 0;
+          const progressInterval = setInterval(() => {
+            progress += 5;
+            if (progress > 95) {
+              clearInterval(progressInterval);
+              return;
+            }
+            setSessions(prev => prev.map(s => s.id === currentSessionId ? {
+              ...s,
+              tasks: s.tasks.map(t => t.id === task.id ? { ...t, result: `🎨 Génération en cours : ${progress}% ...` } : t)
+            } : s));
+          }, 500);
+
+          // 3. Call the specialized image generation API with FULL CONTEXT
+          const imageResult = await ollama.generateImage(prompt);
+          
+          clearInterval(progressInterval);
+          const finalResult = `**Image générée avec succès !** 🎨\n\n![Génération](${imageResult.url})\n\n*Prompt utilisé : ${imageResult.prompt_used}*`;
+          
+          // 4. Final update: mark task as done and UPDATE the same message in chat
+          setSessions(prev => prev.map(s => s.id === currentSessionId ? {
+            ...s,
+            tasks: s.tasks.map(t => t.id === task.id ? { ...t, status: 'done', result: finalResult, completedAt: Date.now() } : t),
+            messages: s.messages.map(m => m.id === progressMsgId ? { ...m, content: finalResult } : m)
           } : s));
           
           return;
@@ -1008,7 +1028,6 @@ PLAN:
           fullResult = `❌ Erreur lors de la génération d'image : ${imageError.message}. Tentative de description textuelle...`;
         }
       }
-
       await ollama.chat(modelToUse, [{ id: '1', role: 'user', content: prompt, timestamp: Date.now() }], (chunk) => {
         if (!hasReceivedFirstChunk && !isLoaded) {
           hasReceivedFirstChunk = true;
