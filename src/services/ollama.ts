@@ -135,14 +135,24 @@ export class OllamaService {
     });
     
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(`Image generation failed: ${errorData.error || response.statusText}${errorData.details ? ` (${errorData.details})` : ''}`);
+      const errorText = await response.text();
+      let errorMessage = `Image generation failed (${response.status})`;
+      try {
+        const errorData = JSON.parse(errorText);
+        errorMessage = `Image generation failed: ${errorData.error || response.statusText}${errorData.details ? ` (${errorData.details})` : ''}`;
+      } catch (e) {
+        errorMessage = `Image generation failed: ${errorText.slice(0, 100)}...`;
+      }
+      throw new Error(errorMessage);
     }
 
     const contentType = response.headers.get('content-type');
     
-    // Fallback if the API returned a standard JSON instead of a stream
-    if (contentType?.includes('application/json')) {
+    // Use SSE reader only if it's explicitly a stream
+    const isStream = contentType?.includes('text/event-stream');
+    
+    if (!isStream) {
+      // If it's not a stream, assume it's a standard JSON response
       return await response.json();
     }
     
@@ -161,7 +171,7 @@ export class OllamaService {
       buffer = lines.pop() || '';
 
       for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
+        if (!line.trim() || !line.startsWith('data: ')) continue;
         try {
           const json = JSON.parse(line.substring(6));
           if (onStatus && (json.type === 'progress' || json.type === 'status' || json.type === 'error')) {
@@ -172,7 +182,7 @@ export class OllamaService {
             return { url: json.url, prompt_used: json.prompt_used || prompt };
           }
         } catch (e) {
-          console.error('Error parsing SSE data from image API:', e);
+          console.error('Error parsing SSE data line:', line, e);
         }
       }
     }

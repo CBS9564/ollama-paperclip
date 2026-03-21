@@ -39,7 +39,7 @@ async function startServer() {
   // Image Generation Proxy
   app.post("/api/generate-image", async (req, res) => {
     const start = Date.now();
-    console.log(`[PROXY] Starting image generation for prompt: "${req.body.prompt?.slice(0, 50)}..."`);
+    console.log(`[PROXY] Request: "${req.body.prompt?.slice(0, 50)}..."`);
     
     try {
       const response = await fetch("http://192.168.1.106:5000/generate", {
@@ -47,25 +47,28 @@ async function startServer() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(req.body),
       });
+
+      // Forward headers from VM to client
+      response.headers.forEach((value, key) => {
+        // Skip some headers that might interfere with compression or transfer
+        if (['content-encoding', 'transfer-encoding', 'connection'].includes(key.toLowerCase())) return;
+        res.setHeader(key, value);
+      });
       
-      // Pass through the content type from the VM (could be SSE or JSON)
-      const contentType = response.headers.get('content-type');
-      if (contentType) {
-        res.setHeader('Content-Type', contentType);
-      }
+      res.status(response.status);
       
       if (!response.ok) {
         const errorText = await response.text();
-        return res.status(response.status).json({ error: `VM returned ${response.status}`, details: errorText });
+        console.error(`[PROXY] VM Error ${response.status}:`, errorText);
+        // If it's already application/json, we just sent the header above
+        return res.send(errorText);
       }
 
       if (!response.body) {
-        throw new Error("No response body from VM");
+        return res.end();
       }
 
       const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -73,12 +76,12 @@ async function startServer() {
       }
       
       const duration = ((Date.now() - start) / 1000).toFixed(1);
-      console.log(`[PROXY] Request completed in ${duration}s (Type: ${contentType})`);
+      console.log(`[PROXY] Success in ${duration}s`);
       res.end();
     } catch (error: any) {
-      console.error("[PROXY] Connection Error:", error.message);
+      console.error("[PROXY] Fatal Error:", error.message);
       if (!res.headersSent) {
-        res.status(500).json({ error: "Failed to connect to Image VM", details: error.message });
+        res.status(500).json({ error: "Proxy Error", details: error.message });
       } else {
         res.end();
       }
