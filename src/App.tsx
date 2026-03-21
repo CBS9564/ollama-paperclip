@@ -721,7 +721,7 @@ PLAN:
               updatedAgents.push({
                 id: crypto.randomUUID(),
                 name: agentName,
-                model: suggested.model || settings.selectedModel,
+                model: settings.selectedModel,
                 systemPrompt: suggested.prompt,
                 color: colors[updatedAgents.length % colors.length],
                 temperature: suggested.temperature ?? 0.7,
