@@ -21,6 +21,7 @@ export interface Task {
   agentId?: string; // ID of the agent assigned
   result?: string; // Output from the agent execution
   isLoadingModel?: boolean; // True when Ollama is swapping models
+  progress?: number; // Real-time progress percentage (0-100)
 }
 
 export interface Message {
@@ -32,6 +33,7 @@ export interface Message {
   agentId?: string;
   taskId?: string;
   isSummary?: boolean;
+  progress?: number; // Real-time progress percentage (0-100)
 }
 
 export interface ChatSession {

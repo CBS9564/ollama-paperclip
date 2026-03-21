@@ -1002,12 +1002,14 @@ PLAN:
               ...s,
               tasks: s.tasks.map(t => t.id === task.id ? { 
                 ...t, 
+                progress: data.type === 'progress' ? data.value : t.progress,
                 result: data.type === 'progress' 
                   ? `🎨 Génération en cours : ${data.value}% ...` 
                   : `🎨 Statut : ${data.msg || 'Début de session GPU...'}` 
               } : t),
               messages: s.messages.map(m => m.id === progressMsgId ? { 
                 ...m, 
+                progress: data.type === 'progress' ? data.value : m.progress,
                 content: data.type === 'progress' 
                   ? `🎨 **Génération de l'image en cours : ${data.value}%**\n\nLe GPU NVIDIA T1000 traite les étapes de diffusion...\n\n⌛ *Calcul des pixels...*`
                   : `🎨 **Message Système : ${data.msg || 'Initialisation...'}**\n\nLe serveur GPU prépare votre image. Temps estimé : 15s.`
@@ -1681,6 +1683,21 @@ PLAN:
                             </div>
                             <div className="markdown-body p-4 rounded-xl bg-black/[0.02] border border-black/5">
                               <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+                              
+                              {message.progress !== undefined && message.progress < 100 && (
+                                <div className="mt-4 space-y-1.5">
+                                  <div className="flex justify-between items-end">
+                                    <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-tight">GPU Rendering Task</span>
+                                    <span className="text-[10px] font-bold text-emerald-600">{message.progress}%</span>
+                                  </div>
+                                  <div className="h-1.5 w-full bg-emerald-100 rounded-full overflow-hidden">
+                                    <div 
+                                      className="h-full bg-emerald-500 rounded-full transition-all duration-300 ease-out"
+                                      style={{ width: `${message.progress}%` }}
+                                    />
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           </div>
                         ) : (
