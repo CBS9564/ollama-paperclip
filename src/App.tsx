@@ -994,24 +994,20 @@ PLAN:
             }]
           } : s));
 
-          // 2. Simple simulation of progress for the Task tab result
-          let progress = 0;
-          const progressInterval = setInterval(() => {
-            progress += 5;
-            if (progress > 95) {
-              clearInterval(progressInterval);
-              return;
-            }
+          // 2. No more manual interval! The progress comes directly from the API.
+          
+          // 3. Call the specialized image generation API with FULL CONTEXT and REAL PROGRESS
+          const imageResult = await ollama.generateImage(prompt, (progress) => {
             setSessions(prev => prev.map(s => s.id === currentSessionId ? {
               ...s,
-              tasks: s.tasks.map(t => t.id === task.id ? { ...t, result: `🎨 Génération en cours : ${progress}% ...` } : t)
+              tasks: s.tasks.map(t => t.id === task.id ? { ...t, result: `🎨 Génération en cours : ${progress}% ...` } : t),
+              messages: s.messages.map(m => m.id === progressMsgId ? { 
+                ...m, 
+                content: `🎨 **Génération de l'image en cours : ${progress}%**\n\nLe GPU NVIDIA T1000 traite les étapes de diffusion...\n\n⌛ *Calcul des pixels...*` 
+              } : m)
             } : s));
-          }, 500);
-
-          // 3. Call the specialized image generation API with FULL CONTEXT
-          const imageResult = await ollama.generateImage(prompt);
+          });
           
-          clearInterval(progressInterval);
           const finalResult = `**Image générée avec succès !** 🎨\n\n![Génération](${imageResult.url})\n\n*Prompt utilisé : ${imageResult.prompt_used}*`;
           
           // 4. Final update: mark task as done and UPDATE the same message in chat

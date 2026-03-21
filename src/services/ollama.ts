@@ -122,11 +122,12 @@ export class OllamaService {
   }
 
   /**
-   * Generates an image using a backend proxy.
+   * Generates an image using a backend proxy with real-time SSE progress.
    * @param prompt The text prompt for image generation.
+   * @param onProgress Optional callback for real-time progress updates (0-100).
    * @returns A promise that resolves to an object containing the image URL and the prompt used.
    */
-  async generateImage(prompt: string): Promise<{ url: string, prompt_used: string }> {
+  async generateImage(prompt: string, onProgress?: (progress: number) => void): Promise<{ url: string, prompt_used: string }> {
     const response = await fetch("/api/generate-image", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -138,7 +139,36 @@ export class OllamaService {
       throw new Error(`Image generation failed: ${errorData.error || response.statusText}${errorData.details ? ` (${errorData.details})` : ''}`);
     }
     
-    return await response.json();
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('No response body from image generation API');
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const json = JSON.parse(line.substring(6));
+          if (json.type === 'progress' && onProgress) {
+            onProgress(json.value);
+          } else if (json.type === 'result') {
+            return { url: json.url, prompt_used: json.prompt_used };
+          }
+        } catch (e) {
+          console.error('Error parsing SSE data from image API:', e);
+        }
+      }
+    }
+
+    throw new Error('Image generation finished without a result packet');
   }
 
   /**
