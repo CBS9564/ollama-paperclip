@@ -122,12 +122,12 @@ export class OllamaService {
   }
 
   /**
-   * Generates an image using a backend proxy with real-time SSE progress.
+   * Generates an image using a backend proxy with real-time SSE progress and status.
    * @param prompt The text prompt for image generation.
-   * @param onProgress Optional callback for real-time progress updates (0-100).
+   * @param onStatus Optional callback for real-time status/progress updates.
    * @returns A promise that resolves to an object containing the image URL and the prompt used.
    */
-  async generateImage(prompt: string, onProgress?: (progress: number) => void): Promise<{ url: string, prompt_used: string }> {
+  async generateImage(prompt: string, onStatus?: (data: { type: 'progress' | 'status' | 'error', value?: number, msg?: string }) => void): Promise<{ url: string, prompt_used: string }> {
     const response = await fetch("/api/generate-image", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -164,10 +164,12 @@ export class OllamaService {
         if (!line.startsWith('data: ')) continue;
         try {
           const json = JSON.parse(line.substring(6));
-          if (json.type === 'progress' && onProgress) {
-            onProgress(json.value);
-          } else if (json.type === 'result') {
-            return { url: json.url, prompt_used: json.prompt_used };
+          if (onStatus && (json.type === 'progress' || json.type === 'status' || json.type === 'error')) {
+            onStatus(json);
+          }
+          
+          if (json.type === 'result') {
+            return { url: json.url, prompt_used: json.prompt_used || prompt };
           }
         } catch (e) {
           console.error('Error parsing SSE data from image API:', e);

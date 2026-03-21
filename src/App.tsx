@@ -994,16 +994,23 @@ PLAN:
             }]
           } : s));
 
-          // 2. No more manual interval! The progress comes directly from the API.
+          // 2. No more manual interval! The status/progress comes directly from the API.
           
-          // 3. Call the specialized image generation API with FULL CONTEXT and REAL PROGRESS
-          const imageResult = await ollama.generateImage(prompt, (progress) => {
+          // 3. Call the specialized image generation API with FULL CONTEXT and REAL STATUS
+          const imageResult = await ollama.generateImage(prompt, (data) => {
             setSessions(prev => prev.map(s => s.id === currentSessionId ? {
               ...s,
-              tasks: s.tasks.map(t => t.id === task.id ? { ...t, result: `🎨 Génération en cours : ${progress}% ...` } : t),
+              tasks: s.tasks.map(t => t.id === task.id ? { 
+                ...t, 
+                result: data.type === 'progress' 
+                  ? `🎨 Génération en cours : ${data.value}% ...` 
+                  : `🎨 Statut : ${data.msg || 'Début de session GPU...'}` 
+              } : t),
               messages: s.messages.map(m => m.id === progressMsgId ? { 
                 ...m, 
-                content: `🎨 **Génération de l'image en cours : ${progress}%**\n\nLe GPU NVIDIA T1000 traite les étapes de diffusion...\n\n⌛ *Calcul des pixels...*` 
+                content: data.type === 'progress' 
+                  ? `🎨 **Génération de l'image en cours : ${data.value}%**\n\nLe GPU NVIDIA T1000 traite les étapes de diffusion...\n\n⌛ *Calcul des pixels...*`
+                  : `🎨 **Message Système : ${data.msg || 'Initialisation...'}**\n\nLe serveur GPU prépare votre image. Temps estimé : 15s.`
               } : m)
             } : s));
           });
