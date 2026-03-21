@@ -1005,14 +1005,16 @@ PLAN:
                 progress: data.type === 'progress' ? data.value : t.progress,
                 result: data.type === 'progress' 
                   ? `🎨 Génération en cours : ${data.value}% ...` 
-                  : `🎨 Statut : ${data.msg || 'Début de session GPU...'}` 
+                  : (data.type === 'error' ? `❌ Erreur GPU : ${data.msg}` : `🎨 Statut : ${data.msg || 'Traitement...'}`)
               } : t),
               messages: s.messages.map(m => m.id === progressMsgId ? { 
                 ...m, 
                 progress: data.type === 'progress' ? data.value : m.progress,
                 content: data.type === 'progress' 
                   ? `🎨 **Génération de l'image en cours : ${data.value}%**\n\nLe GPU NVIDIA T1000 traite les étapes de diffusion...\n\n⌛ *Calcul des pixels...*`
-                  : `🎨 **Message Système : ${data.msg || 'Initialisation...'}**\n\nLe serveur GPU prépare votre image. Temps estimé : 15s.`
+                  : (data.type === 'error' 
+                      ? `❌ **Erreur Critique GPU**\n\n${data.msg}\n\n*Tentative de récupération en cours...*` 
+                      : `🎨 **Statut : ${data.msg || 'Initialisation...'}**\n\nLe serveur GPU prépare votre image. Temps estimé : 15s.`)
               } : m)
             } : s));
           });
