@@ -102,6 +102,18 @@ const MessageContent = React.memo(({
   const parts = content.split(combinedRegex);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
 
+  const autoExpandedRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const inProgressTask = tasks.find(t => t.status === 'in-progress');
+    if (inProgressTask) {
+      if (autoExpandedRef.current !== inProgressTask.id) {
+        setExpandedTaskId(inProgressTask.id);
+        autoExpandedRef.current = inProgressTask.id;
+      }
+    }
+  }, [tasks]);
+
   // Form state for agent approval
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [editPrompt, setEditPrompt] = useState('');
@@ -363,11 +375,25 @@ const MessageContent = React.memo(({
           );
         }
 
-        return <span key={index} className="whitespace-pre-wrap">{part}</span>;
+        let cleanText = part
+          .replace(/CLASSIFY\s*:/g, '🧠 **Analyse & Stratégie :**\n')
+          .replace(/PROVISION\s*:/g, '')
+          .replace(/PLAN\s*:/g, '')
+          .replace(/\[AFTERTAKE\]/g, '\n**Note de fin :**')
+          .trim();
+
+        if (!cleanText) return null;
+
+        return (
+          <div key={index} className="whitespace-pre-wrap text-black/80">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{cleanText}</ReactMarkdown>
+          </div>
+        );
       })}
     </div>
   );
 });
+
 export default function App() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -524,10 +550,10 @@ export default function App() {
     return `CORE PRINCIPLES:
 1. REFLECTION: Before creating agents or tasks, think deeply about the user's intent, the domains involved, and the most efficient way to achieve the goal. Describe your reasoning in the CLASSIFY section.
 2. AGENT EXPERTISE: In PROVISION, you MUST provide an extremely detailed, technical, and precise system prompt for each agent. Define their specific expertise, analytical frameworks, and operational constraints. Avoid generic descriptions; act as a senior technical lead designing a specialized workforce.
-3. IMAGE GENERATION: We have a HIGH-PERFORMANCE NVIDIA T1000 GPU dedicated to image generation. If the project requires visuals, ALWAYS create an agent named 'Illustrateur' (or 'Illustrator'). TECHNICAL CONSTRAINTS: The system generates images at exactly 512x512 pixels in PNG format. The 'Illustrateur' MUST NOT claim to provide higher resolutions (like 3000x2000) as this would be an hallucination. Place image tasks AFTER the analysis tasks they depend on. The task title should explicitly mention dependencies (e.g., "Generate image BASED ON Stylist's color palette"). The system uses a specialized REST API that automatically enriches your prompt for the best results.
+3. IMAGE GENERATION: We have a HIGH-PERFORMANCE NVIDIA T1000 GPU dedicated to image generation. If the project requires visuals, ALWAYS create an agent named 'Illustrateur' (or 'Illustrator'). TECHNICAL CONSTRAINTS: The system generates images at exactly 512x512 pixels in PNG format. The 'Illustrateur' MUST NOT claim to provide higher resolutions. CRITICAL CHRONOLOGY: You MUST place ALL illustration/image generation tasks STRICTLY AT THE VERY END of the [PLAN] section, after all other agents have finished their work and left their notes. NEVER reference agents in the task title that you did not actually create. Create ALL necessary preparatory agents first.
 4. CHRONOLOGY: Ensure the [PLAN] is strictly sequential. Tasks that require information from earlier agents must follow them in the list.
 5. MODEL INTELLIGENCE: Assign each agent the most suitable model from the available list below. Use larger models for complex reasoning/creative writing and smaller/faster models for specialized data extraction or formatting.
-6. COLLABORATION: Instruct agents that they can suggest task re-attribution or request clarifications in their results if they hit a blocker.
+6. COLLABORATION & SHARED MEMORY: Instruct agents in their system prompt that they are part of a team with a shared memory. They MUST leave clear notes or instructions for the next agents at the end of their results to ensure a smooth workflow.
 7. LANGUAGE CONSISTENCY: ALWAYS respond and define agent prompts in the SAME LANGUAGE as the user input (e.g., if the user asks in French, everything must be in French).
 
 AVAILABLE MODELS ON THIS SERVER:
@@ -672,7 +698,18 @@ PLAN:
     let accumulatedContent = '';
 
     try {
-      await ollama.chat(settings.selectedModel, [...(activeSession?.messages || []), userMessage], (chunk) => {
+      // Prevent context contamination by enforcing the orchestrator role in the last message
+      const messagesForAPI = [...(activeSession?.messages || []), userMessage].map((m, idx, arr) => {
+        if (idx === arr.length - 1 && isAgentModeAtStart) {
+          return { 
+            ...m, 
+            content: `${m.content}\n\n[SYSTEM REMINDER: You are in Orchestrator (Agent) Mode. You MUST respond using the strict CLASSIFY, PROVISION, and PLAN bracket tags described in your system prompt. Ignore previous conversational formatting.]` 
+          };
+        }
+        return m;
+      });
+
+      await ollama.chat(settings.selectedModel, messagesForAPI, (chunk) => {
         accumulatedContent += chunk;
         
         const now = Date.now();
@@ -858,16 +895,16 @@ PLAN:
 
     const orchestrator = session.agents.find(a => a.id === 'orchestrator');
     const resultsContext = session.tasks
-      .map(t => `Task: ${t.title}\nAgent: ${session.agents.find(a => a.id === t.agentId)?.name || 'Orchestrator'}\nResult: ${t.result}`)
+      .map(t => `**${t.title}** (par *${session.agents.find(a => a.id === t.agentId)?.name || 'Orchestrator'}*)\n${t.result.substring(0, 1000)}...`)
       .join('\n\n---\n\n');
 
-    const prompt = `ALL ORCHESTRATED TASKS ARE NOW COMPLETE. 🎯\n\nHere are the results for each phase:\n\n${resultsContext}\n\nBased on these outcomes, please provide a comprehensive final summary for the user. Synthesize the findings, highlight key accomplishments, and offer any final recommendations or next steps. Be encouraging and clear.✨`;
+    const prompt = `L'ENSEMBLE DES TÂCHES DU PROJET EST TERMINÉ. 🎯\n\nVoici un aperçu des travaux réalisés par vos agents :\n\n${resultsContext}\n\nINSTRUCTION CRITIQUE : Génère un résumé COURT, CONCIS et avec une MISE EN FORME IRRÉPROCHABLE (Markdown, listes à puces, titres subtils). Ce résumé doit présenter à l'utilisateur ce qui a été accompli globalement par l'équipe, sans répéter tous les détails techniques. Reste professionnel, dynamique, et annonce que les livrables finaux sont disponibles dans le gestionnaire de tâches.`;
 
     const summaryId = crypto.randomUUID();
     const summaryMsg: Message = {
       id: summaryId,
       role: 'assistant',
-      content: 'All tasks are complete! Synthesizing the final results...',
+      content: '🔄 **Synthèse en cours...** L\'orchestrateur rédige le résumé de fin de projet.',
       timestamp: Date.now(),
       isSummary: true
     };
@@ -944,6 +981,18 @@ PLAN:
     try {
       let fullResult = '';
       
+      // Extract global project context (the user's messages)
+      const userMessages = currentSession?.messages
+        .filter(m => m.role === 'user' && m.id !== 'summary-user')
+        .map(m => m.content)
+        .join('\n\n');
+
+      // Extract the team of agents
+      const teamContext = currentSession?.agents
+        .filter(a => a.id !== 'orchestrator')
+        .map(a => `- ${a.name}: ${a.systemPrompt.substring(0, 100)}...`)
+        .join('\n');
+
       // Get results of previous tasks for context
       const previousResults = currentSession?.tasks
         .filter(t => t.status === 'done' && t.result)
@@ -951,9 +1000,17 @@ PLAN:
         .join('\n\n');
 
       const isSetupTask = task.title.startsWith('(Setup) Initialize Agent:');
+      
       const prompt = isSetupTask 
         ? `TASK: ${task.title}\n\nPlease confirm that you have initialized the agent described. Briefly state its specialized role.`
-        : `CONTEXT OF COMPLETED TASKS:\n${previousResults || 'No tasks completed yet.'}\n\nCURRENT TASK TO EXECUTE:\n${task.title}\n\nPlease execute this task and provide the result based on the context above if relevant.`;
+        : `OBJECTIF GLOBAL DU PROJET :\n${userMessages || 'Aucun contexte initial défini.'}\n\n` +
+          `ÉQUIPE D'AGENTS DISPONIBLES :\n${teamContext || 'Aucun autre agent.'}\n\n` +
+          `RÉSULTATS DES TÂCHES PRÉCÉDENTES :\n${previousResults || 'Aucune tâche terminée pour le moment.'}\n\n` +
+          `TÂCHE ACTUELLE À EXÉCUTER :\n${task.title}\n\n` +
+          `INSTRUCTIONS IMPORTANTES :\n` +
+          `1. Exécutez cette tâche en prenant en compte l'objectif global du projet et les résultats précédents.\n` +
+          `2. Si votre travail doit être utilisé par un autre agent, laissez-lui des instructions ou des notes claires à la fin de votre réponse.\n` +
+          `3. Considérez-vous comme faisant partie d'une mémoire collective travaillant vers l'objectif global.`;
       
       const modelToUse = agent.model || settings.selectedModel;
       
@@ -976,28 +1033,43 @@ PLAN:
       
       if (isImageTask && !isSetupTask) {
         try {
+          // 0. Pre-process the context to generate a clean, comma-separated English prompt for the image API
+          setSessions(prev => prev.map(s => s.id === currentSessionId ? {
+            ...s,
+            tasks: s.tasks.map(t => t.id === task.id ? { ...t, result: '🧠 Analyse du contexte pour extraire le prompt visuel...' } : t)
+          } : s));
+
+          const extractionPrompt = `${prompt}\n\nCRITICAL INSTRUCTION: You are the Illustrator. Based on the context above, extract ONLY the visual descriptions to feed into a Stable Diffusion image generator. Format it as a simple comma-separated list of visual English keywords (e.g., "a futuristic city, cyberpunk, neon lights, masterpiece"). DO NOT include any conversational text, structural formatting, or technical constraints (do not include "512x512" or "PNG"). ONLY visual keywords.`;
+          
+          let cleanImagePrompt = '';
+          await ollama.chat(modelToUse, [{ id: 'img-prep', role: 'user', content: extractionPrompt, timestamp: Date.now() }], (chunk) => {
+            cleanImagePrompt += chunk;
+          }, "You are a specialized Stable Diffusion prompt engineer. Output ONLY comma-separated English visual keywords. No chatter. No quotes. No markdown formatting. No technical data.", abortControllerRef.current?.signal, { temperature: 0.1 });
+
+          // Force clean the LLM output
+          cleanImagePrompt = cleanImagePrompt.replace(/```[a-zA-Z]*\n/g, '').replace(/```/g, '').trim();
+          cleanImagePrompt = cleanImagePrompt.replace(/^(here are the keywords:|keywords:|prompt:|image prompt:|output:|voici le prompt:)/i, '').trim();
+          if (cleanImagePrompt.startsWith('"') && cleanImagePrompt.endsWith('"')) {
+             cleanImagePrompt = cleanImagePrompt.slice(1, -1);
+          }
+          cleanImagePrompt = cleanImagePrompt.trim();
+          
+          // Ensure prompt has high-quality Stable Diffusion tags to prevent incoherence
+          if (!cleanImagePrompt.toLowerCase().includes('masterpiece')) {
+             cleanImagePrompt = `masterpiece, best quality, highly detailed, ${cleanImagePrompt}`;
+          }
+
           // Generate a unique ID for the "Generation" message so we can update it
           const progressMsgId = crypto.randomUUID();
           
-          // 1. Initial status update and push "Generation in Progress" message to chat
+          // 1. Initial status update
           setSessions(prev => prev.map(s => s.id === currentSessionId ? {
             ...s,
-            tasks: s.tasks.map(t => t.id === task.id ? { ...t, result: '🎨 Préparation de la génération sur le GPU...' } : t),
-            messages: [...s.messages, {
-              id: progressMsgId,
-              role: 'assistant' as const,
-              type: 'agent-result' as const,
-              agentId: agent.id,
-              taskId: task.id,
-              content: '🎨 **Génération de l\'image en cours...**\n\nChargement du modèle Stable Diffusion Realistic Vision V5.1 sur le GPU NVIDIA T1000.\n\n⌛ *Temps estimé : 10-15 secondes*',
-              timestamp: Date.now()
-            }]
+            tasks: s.tasks.map(t => t.id === task.id ? { ...t, result: `🎨 Génération sur le GPU en cours avec le prompt: "${cleanImagePrompt.substring(0, 50)}..."` } : t)
           } : s));
 
-          // 2. No more manual interval! The status/progress comes directly from the API.
-          
-          // 3. Call the specialized image generation API with FULL CONTEXT and REAL STATUS
-          const imageResult = await ollama.generateImage(prompt, (data) => {
+          // 2. Call the specialized image generation API with the CLEAN PROMPT
+          const imageResult = await ollama.generateImage(cleanImagePrompt, (data) => {
             setSessions(prev => prev.map(s => s.id === currentSessionId ? {
               ...s,
               tasks: s.tasks.map(t => t.id === task.id ? { 
@@ -1006,26 +1078,16 @@ PLAN:
                 result: data.type === 'progress' 
                   ? `🎨 Génération en cours : ${data.value}% ...` 
                   : (data.type === 'error' ? `❌ Erreur GPU : ${data.msg}` : `🎨 Statut : ${data.msg || 'Traitement...'}`)
-              } : t),
-              messages: s.messages.map(m => m.id === progressMsgId ? { 
-                ...m, 
-                progress: data.type === 'progress' ? data.value : m.progress,
-                content: data.type === 'progress' 
-                  ? `🎨 **Génération de l'image en cours : ${data.value}%**\n\nLe GPU NVIDIA T1000 traite les étapes de diffusion...\n\n⌛ *Calcul des pixels...*`
-                  : (data.type === 'error' 
-                      ? `❌ **Erreur Critique GPU**\n\n${data.msg}\n\n*Tentative de récupération en cours...*` 
-                      : `🎨 **Statut : ${data.msg || 'Initialisation...'}**\n\nLe serveur GPU prépare votre image. Temps estimé : 15s.`)
-              } : m)
+              } : t)
             } : s));
           });
           
-          const finalResult = `**Image générée avec succès !** 🎨\n\n![Génération](${imageResult.url})\n\n*Prompt utilisé : ${imageResult.prompt_used}*`;
+          const finalResult = `**Image générée avec succès !** 🎨\n\n![Génération](${imageResult.url})\n\n*Prompt généré par l'IA : ${cleanImagePrompt}*`;
           
-          // 4. Final update: mark task as done and UPDATE the same message in chat
+          // 3. Final update: mark task as done
           setSessions(prev => prev.map(s => s.id === currentSessionId ? {
             ...s,
-            tasks: s.tasks.map(t => t.id === task.id ? { ...t, status: 'done', result: finalResult, completedAt: Date.now() } : t),
-            messages: s.messages.map(m => m.id === progressMsgId ? { ...m, content: finalResult } : m)
+            tasks: s.tasks.map(t => t.id === task.id ? { ...t, status: 'done', result: finalResult, completedAt: Date.now() } : t)
           } : s));
           
           return;
@@ -1072,22 +1134,13 @@ PLAN:
         return s;
       }));
 
-      // Mark as done and push result to chat
+      // Mark as done
       setSessions(prev => {
         const nextSessions = prev.map(s => {
           if (s.id === currentSessionId) {
             return {
               ...s,
-              tasks: s.tasks.map(t => t.id === task.id ? { ...t, status: 'done' as TaskStatus, completedAt: Date.now() } : t),
-              messages: [...s.messages, {
-                id: crypto.randomUUID(),
-                role: 'assistant' as const,
-                type: 'agent-result' as const,
-                agentId: agent.id,
-                taskId: task.id,
-                content: fullResult,
-                timestamp: Date.now()
-              }]
+              tasks: s.tasks.map(t => t.id === task.id ? { ...t, status: 'done' as TaskStatus, completedAt: Date.now() } : t)
             };
           }
           return s;

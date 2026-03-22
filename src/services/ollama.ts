@@ -131,7 +131,13 @@ export class OllamaService {
     const response = await fetch("/api/generate-image", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt })
+      body: JSON.stringify({ 
+        prompt,
+        negative_prompt: "ugly, blurry, noisy, messy, deformed, bad anatomy, text, watermark, signature, poor quality, worst quality, low resolution",
+        width: 512,
+        height: 512,
+        steps: 20
+      })
     });
     
     if (!response.ok) {
